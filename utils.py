@@ -115,7 +115,7 @@ def get_afq(dataset_name):
             dmriprep='dmriprep'
         )
 
-    raise
+    raise Exception(f'{dataset_name} not supported')
 
 
 def display_dwi_slice(dataset_name, dwi_nii):
@@ -154,7 +154,7 @@ def fetch_data(dataset_name, subjects):
     elif dataset_name == 'HCP_retest':
         afd.fetch_hcp(subjects, study='HCP_Retest')
 
-    raise
+    raise Exception(f'{dataset_name} not supported')
 
 
 def get_hcp_s3_url(dataset_name, subject):
@@ -163,7 +163,7 @@ def get_hcp_s3_url(dataset_name, subject):
     elif dataset_name == 'HCP_retest':
         return f's3://profile-hcp-west/hcp_reliability/single_shell/hcp_retest_afq/sub-{subject}/'
 
-    raise
+    raise Exception(f'{dataset_name} not supported')
 
 
 def get_iloc(myafq, subject):
@@ -197,14 +197,14 @@ def get_dir_name(myafq, dataset_name, bundle_name, loc):
     )
 
     if not op.exists(target_dir):
-        raise
+        raise Exception(f'{target_dir} does not exist')
 
     return target_dir
 
 
 def get_tractogram_filename(myafq, bundle_name, loc):
     if not myafq.bundle_dict.get(bundle_name):
-        raise
+        raise Exception(f'{bundle_name} not found')
 
     row = myafq.data_frame.iloc[loc]
 
@@ -224,7 +224,7 @@ def get_tractogram_filename(myafq, bundle_name, loc):
     tg_fname = op.join(bundles_dir, fname[1])
 
     if not op.exists(tg_fname):
-        raise
+        raise Exception(f'{tg_fname} does not exist')
 
     return tg_fname
 
@@ -233,7 +233,7 @@ def get_scalar_filename(myafq, scalar, loc):
     row = myafq.data_frame.iloc[loc]
 
     if scalar not in myafq.scalars:
-        raise
+        raise Exception(f'{scalar} not supported')
 
     scalar_fname = myafq._get_fname(
         row,
@@ -241,7 +241,7 @@ def get_scalar_filename(myafq, scalar, loc):
     )
 
     if not op.exists(scalar_fname):
-        raise
+        raise Exception(f'{scalar_fname} does not exist')
 
     return scalar_fname
 
@@ -281,7 +281,7 @@ def adjacency_test(adjacency):
     plt.hist(adjacency.ravel())
     plt.show()
 
-    print('symmetric: ', not(np.sum(adjacency-adjacency.T)))
+    print('symmetric: ', not(np.sum(abs(adjacency-adjacency.T))))
     print('finite: ', np.isfinite(adjacency).any())
     print('min: ', np.min(adjacency))
     print('max: ', np.max(adjacency))
@@ -319,3 +319,12 @@ def natural_sort(list_to_sort):
     # def alphanum_key(key): [convert(c) for c in re.split('([0-9]+)', key)]
     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
     return sorted(list_to_sort, key=alphanum_key)
+
+
+def resort_cluster_ids(idx):
+    from_values = np.flip(np.argsort(np.bincount(idx))[-(np.unique(idx).size):])
+    to_values = np.arange(from_values.size)
+    d = dict(zip(from_values, to_values))
+    new_idx = np.copy(idx)
+    for k, v in d.items(): new_idx[idx==k] = v
+    return new_idx
