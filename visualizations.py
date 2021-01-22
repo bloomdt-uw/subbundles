@@ -198,12 +198,13 @@ def load_clusters(base_dir, bundle_name):
 
             # sorted alphabetically
             remote_cluster_filenames = fs.glob(f'hcp-subbundle/{session}/{bundle_name}/{subject}/{n_clusters}/*idx.npy')
+            # NOTE Be careful BIG assumption about which models were run!
             # which is not what want...
             # want sc 0 - 10 followed by mase
             # quickhack - long term should identify and separate models and hyperparameters
             my_order = [1, 3, 4, 5, 6, 7, 8, 9, 10, 2, 0]
             remote_cluster_filenames = [remote_cluster_filenames[i] for i in my_order]
-            # print(remote_cluster_filenames)
+            print(remote_cluster_filenames)
 
             for remote_cluter_filename in remote_cluster_filenames:
                 # print(subject, session, remote_cluter_filename)
