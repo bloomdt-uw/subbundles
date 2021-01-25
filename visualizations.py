@@ -1,15 +1,12 @@
-# did not complete for 130518 and 287248
 # does not exist for 662551
 subjects = [
     '103818', '105923', '111312', '114823', '115320',
-    '122317', '125525', # '130518', 
-    '135528', '137128',
+    '122317', '125525', '130518', '135528', '137128',
     '139839', '143325', '144226', '146129', '149337',
     '149741', '151526', '158035', '169343', '172332',
     '175439', '177746', '185442', '187547', '192439',
     '194140', '195041', '200109', '200614', '204521',
-    '250427', # '287248', 
-    '341834', '433839', '562345',
+    '250427', '287248', '341834', '433839', '562345',
     '599671', '601127', '627549', '660951', # '662551', 
     '783462', '859671', '861456', '877168', '917255'
 ]
@@ -19,46 +16,6 @@ session_names = ['HCP_1200', 'HCP_Retest']
 bundle_names = ['SLF_L']
 
 n_clusters = 3
-
-
-# def relabel_clusters(labels):
-#     """
-#     relabel_clusters(labels)
-
-#     During the clustering process streamlines have been assigned a label.
-
-#     For purposes model comparison it is convienient to relabel the clusters from highest to lowest frequency.
-
-#     The new labels are sequential with highest frequency label starting at 0
-
-#     Parameters
-#     ----------
-#     labels : ndarray of ints, 1 dimension, nonnegative ints
-#         The length of `labels` is equal to number of streamlines.
-
-#     Returns
-#     -------
-#     out : ndarray of ints, 1 dimension, nonnegative ints
-
-#     Examples
-#     --------
-#     >>> relabel_clusters(np.array([0, 1, 1, 3, 2, 1]))
-#     array([3, 0, 0, 1, 2, 0])
-#     """
-#     import numpy as np
-
-#     from_values = np.flip(np.argsort(np.bincount(labels))[-(np.unique(labels).size):])
-#     to_values = np.arange(from_values.size)
-
-#     d = dict(zip(from_values, to_values))
-
-#     new_labels = np.copy(labels)
-
-#     for k, v in d.items():
-#         new_labels[labels == k] = v
-
-#     return new_labels
-
 
 def load_scalar_data(base_dir):
     """
@@ -202,9 +159,11 @@ def load_clusters(base_dir, bundle_name):
             # which is not what want...
             # want sc 0 - 10 followed by mase
             # quickhack - long term should identify and separate models and hyperparameters
-            my_order = [1, 3, 4, 5, 6, 7, 8, 9, 10, 2, 0]
+            # my_order = [1, 3, 4, 5, 6, 7, 8, 9, 10, 2, 0]
+            # want mase mdf, fa mdf, fa md mdf
+            my_order = [2, 0, 1]
             remote_cluster_filenames = [remote_cluster_filenames[i] for i in my_order]
-            print(remote_cluster_filenames)
+            # print(remote_cluster_filenames)
 
             for remote_cluter_filename in remote_cluster_filenames:
                 # print(subject, session, remote_cluter_filename)
@@ -553,23 +512,6 @@ def plot_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, model_
                     ii += 1
     
     # TODO streamline cluster plots
-    # cluster_colors = sns.color_palette("bright6")
-
-    # for session in session_names:
-    #     session_model_names = df.model_name.unique()
-    #     for model_name in session_model_names:
-    #         model_cluster_names = df.query(f'session == "{session}" & model_name == "{model_name}"')['cluster_name'].unique()
-
-    #         for cluster_name in model_cluster_names:
-    #             df1 = pd.DataFrame(np.array([profile for _, profile in df.query(f'session == "{session}" & model_name == "{model_name}" & cluster_name == {cluster_name}')['profile'].iteritems()]))
-    #             print(df1)
-    #         #     plt.figure()
-    #         #     plt.plot(x=df1.T.values, y=df1.T.index, alpha=0.3, color=cluster_colors[cluster_name])
-    #         #     # df1.T.plot()
-    #         #     # sns.lineplot(data=df1.T, color=cluster_colors[cluster_name], plot_kws=dict(alpha=0.3))
-    #         #     plt.title(f'{bundle_name} {session} {model_name} fa profiles')
-    #         #     plt.savefig(join(base_dir, f'{session}_{model_name}_cluster_{cluster_name}_profile.png'))
-    #         #     plt.close()
 
     # 95% ci plot
     for session in session_names:
@@ -607,6 +549,7 @@ def find_best_clusters(dice_matrix, dice_pairs=None):
     # setting to negative dice coefficient value
     _dice_matrix[idx[0], :] = -1
     _dice_matrix[:, idx[1]] = -1
+    print(_dice_matrix)
 
     if (_dice_matrix == -1*np.ones(_dice_matrix.shape)).all():
         return dice_pairs
@@ -657,44 +600,32 @@ def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_d
     
         df = pd.DataFrame(columns=["hyperparameter", "pair", "dice", "fa_r2"])
 
-        # pad dataframe  - to visually space model clusters
-        # df = df.append({
-        #             "hyperparameter": '',
-        #             "pair": '',
-        #             "dice": '',
-        #             "fa_r2": ''
-        #         }, ignore_index=True)
-
         dice_matrix = cluster_dice_coef[subject]
         profile_matrix = cluster_profile_fa_r2[subject]
 
+        i = 0
         for model_num in range(number_of_models(model_names, subject, session_names[1])):
             test_clusters = number_of_clusters(cluster_names, subject, session_names[0], model_num)
             retest_clusters = number_of_clusters(cluster_names, subject, session_names[1], model_num)
 
             num_clusters = np.amin([test_clusters, retest_clusters])
 
-            i = model_num*num_clusters
+            
             j = i+num_clusters
             ij_slice = np.s_[i:j,i:j]
-
+            i = j
             dice_pairs = find_best_clusters(dice_matrix[ij_slice])
 
+            k = 0
             for dice_pair in dice_pairs:
                 df = df.append({
                     "hyperparameter": f'{model_num}',
+                    "cluster": (n_clusters*model_num)+k,
                     "pair": dice_pair,
                     "dice": dice_matrix[ij_slice][dice_pair],
                     "fa_r2": profile_matrix[ij_slice][dice_pair]
                 }, ignore_index=True)
-
-            # pad dataframe - to visually space model clusters
-            # df = df.append({
-            #         "hyperparameter": '',
-            #         "pair": '',
-            #         "dice": '',
-            #         "fa_r2": ''
-            #     }, ignore_index=True)
+                k += 1
 
         # TODO could plot each subject
         df.to_csv(join(base_dir, f'{subject}_{bundle_name}_summary.csv'))
@@ -704,9 +635,9 @@ def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_d
     for subject in subjects:
         df = summary_dfs[subject]
         df['subject'] = subject
-        df.index.name='idx'
+        # df.index.name='idx'
         frames.append(df)
-    bundle_df = pd.concat(frames).groupby('idx').agg({'dice': ['mean', 'std'], 'fa_r2': ['mean', 'std']})
+    bundle_df = pd.concat(frames).groupby('cluster').agg({'dice': ['mean', 'std'], 'fa_r2': ['mean', 'std']})
     bundle_df.to_csv(join(base_dir, f'{bundle_name}_summary.csv'))
 
     fig, ax = plt.subplots(figsize=(20,4))
@@ -749,3 +680,89 @@ def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_d
     # plt.show()
     plt.savefig(join(base_dir, f'test-retest_model_comparision.png'))
     plt.close()
+
+
+def anatomy_visualizations(base_dir, bundle_name, subject, model_names, cluster_names, cluster_idxs, tractograms):
+    import seaborn as sns
+    import os.path as op
+    import tempfile
+    import AFQ.data as afd
+    from AFQ import api
+    from AFQ.viz.fury_backend import visualize_volume
+    from dipy.io.stateful_tractogram import StatefulTractogram
+    from dipy.viz import window, actor
+    import matplotlib.pyplot as plt
+
+    # colors = sns.color_palette("bright6")
+    colors = sns.color_palette()
+
+    for session_name in session_names:
+        pyafq = api.AFQ(
+            bids_path=op.join(afd.afq_home, session_name),
+            dmriprep='dmriprep'
+        )
+
+        # note subject may or may not exist in pyafq
+        iloc, = pyafq.data_frame.index[pyafq.data_frame['subject'] == subject]
+        row = pyafq.data_frame.loc[iloc]
+
+        volume, _ = pyafq._viz_prepare_vols(
+            row,
+            volume=None,
+            xform_volume=False,
+            color_by_volume=None,
+            xform_color_by_volume=False
+        )
+
+        for model_name, model_cluster_name, model_cluster_idxs in zip(model_names[subject][session_name], cluster_names[subject][session_name], cluster_idxs[subject][session_name]):
+            scene = window.Scene()
+
+            figure = visualize_volume(
+                volume,
+                interact=False,
+                inline=False,
+                figure=scene
+            )
+
+            figure.SetBackground(1,1,1)
+
+            num_clusters = []
+
+            # get stateful tractogram for each cluster
+            # NOTE cluster tractograms are saved on AWS so could just download
+            for cluster_name in model_cluster_name:
+                num_clusters.append(len(model_cluster_idxs[cluster_name]))
+                tg = StatefulTractogram.from_sft(tractograms[subject][session_name].streamlines[model_cluster_idxs[cluster_name]], tractograms[subject][session_name])
+                tg.to_vox()
+                streamline_actor = actor.streamtube(tg.streamlines, colors[cluster_name], linewidth=0.6)
+                figure.add(streamline_actor)
+            
+            # use tempfile so can add title
+            fname = tempfile.NamedTemporaryFile().name + '.png'
+            window.snapshot(scene, fname=fname, size=(600, 400))
+
+            plt.imshow(plt.imread(fname))
+            plt.title(f'{session_name} {bundle_name}\n{model_name}\n{subject}\n{num_clusters}')
+            plt.axis('off')
+            
+            f_name = op.join(base_dir, f'{subject}_anat_0_{session_name}_{bundle_name}_{model_name}.png')
+            print(f_name)
+            plt.savefig(f_name)
+            
+            # second perspective
+
+            figure.azimuth(90)
+            figure.roll(90)
+
+            # use tempfile so can add title
+            fname = tempfile.NamedTemporaryFile().name + '.png'
+            window.snapshot(figure, fname=fname, size=(600, 400))
+            
+            plt.imshow(plt.imread(fname))
+            plt.title(f'{session_name} {bundle_name}\n{model_name}\n{subject}\n{num_clusters}')
+            plt.axis('off')
+            
+            f_name = op.join(base_dir, f'{subject}_anat_1_{session_name}_{bundle_name}_{model_name}.png')
+            print(f_name)
+            plt.savefig(f_name)
+            plt.close()
