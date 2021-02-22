@@ -17,36 +17,7 @@ bundle_names = ['SLF_L']
 
 n_clusters = 3
 
-def load_scalar_data(base_dir):
-    """
-    load_scalar_data(base_dir)
-
-    Load FA scalar data for each subject in `subjects`.
-
-    Scalar data is used to calculate the `afq_profiles` for bundles and for clusters.
-
-    It is assumed that scalar data is available on S3. In this case, it will look for
-    FA values from HCP reliability single shell for each `subject` and `session`.
-
-    Parameters
-    ----------
-    base_dir : str
-        Local working diriectory under which FA values are stored.
-
-        It is assumed that `base_dir` folder contains following structure:
-        ├── `subject`
-        │   ├── `session`
-
-        The scalar file name for each subject session is assumed to be 'FA.nii.gz'
-
-        If the file exists it will be loaded from disk, otherwise it will be 
-        downloaded from S3.
-
-    Returns
-    -------
-    out : ndarray, 2 dimensional
-
-    """
+def load_fa_scalar_data(base_dir, csd=False):
     import s3fs
     from os.path import exists, join
     import nibabel as nib
@@ -62,21 +33,75 @@ def load_scalar_data(base_dir):
         for session in session_names:
             scalar_filename = join(base_dir, subject, session, scalar_basename)
             if not exists(scalar_filename):
-                fs.get(
-                    (
-                        f'profile-hcp-west/hcp_reliability/single_shell/'
-                        f'{session.lower()}_afq/sub-{subject}/ses-01/'
-                        f'sub-{subject}_dwi_model-DTI_FA.nii.gz'
-                    ),
-                    scalar_filename
-                )
+                if csd:
+                    fs.get(
+                        (
+                            f'profile-hcp-west/hcp_reliability/single_shell/'
+                            f'{session.lower()}_afq_CSD/'
+                            f'sub-{subject}/ses-01/'
+                            f'sub-{subject}_dwi_model-DTI_FA.nii.gz'
+                        ),
+                        scalar_filename
+                    )
+                else:
+                    fs.get(
+                        (
+                            f'profile-hcp-west/hcp_reliability/single_shell/'
+                            f'{session.lower()}_afq/'
+                            f'sub-{subject}/ses-01/'
+                            f'sub-{subject}_dwi_model-DTI_FA.nii.gz'
+                        ),
+                        scalar_filename
+                    )
 
             scalar_data[subject][session] = nib.load(scalar_filename).get_fdata()
 
     return scalar_data
 
 
-def load_tractograms(base_dir, bundle_name):
+def load_md_scalar_data(base_dir, csd=False):
+    import s3fs
+    from os.path import exists, join
+    import nibabel as nib
+
+    fs = s3fs.S3FileSystem()
+
+    scalar_basename = 'MD.nii.gz'
+
+    scalar_data = {}
+
+    for subject in subjects:
+        scalar_data[subject] = {}
+        for session in session_names:
+            scalar_filename = join(base_dir, subject, session, scalar_basename)
+            if not exists(scalar_filename):
+                if csd:
+                    fs.get(
+                        (
+                            f'profile-hcp-west/hcp_reliability/single_shell/'
+                            f'{session.lower()}_afq_CSD/'
+                            f'sub-{subject}/ses-01/'
+                            f'sub-{subject}_dwi_model-DTI_MD.nii.gz'
+                        ),
+                        scalar_filename
+                    )
+                else:
+                    fs.get(
+                        (
+                            f'profile-hcp-west/hcp_reliability/single_shell/'
+                            f'{session.lower()}_afq/'
+                            f'sub-{subject}/ses-01/'
+                            f'sub-{subject}_dwi_model-DTI_MD.nii.gz'
+                        ),
+                        scalar_filename
+                    )
+
+            scalar_data[subject][session] = nib.load(scalar_filename).get_fdata()
+
+    return scalar_data
+
+
+def load_tractograms(base_dir, bundle_name, csd=False):
     import s3fs
     from os.path import exists, join
     from dipy.io.streamline import load_tractogram
@@ -96,14 +121,26 @@ def load_tractograms(base_dir, bundle_name):
         for session in session_names:
             tractogram_filename = join(base_dir, subject, session, tractogram_basename)
             if not exists(tractogram_filename):
-                fs.get(
-                    (
-                        f'profile-hcp-west/hcp_reliability/single_shell/'
-                        f'{session.lower()}_afq/sub-{subject}/ses-01/'
-                        f'clean_bundles/sub-{subject}_dwi_space-RASMM_model-DTI_desc-det-afq-{bundle_name}_tractography.trk'
-                    ),
-                    tractogram_filename
-                )          
+                if csd:
+                    fs.get(
+                        (
+                            f'profile-hcp-west/hcp_reliability/single_shell/'
+                            f'{session.lower()}_afq_CSD/'
+                            f'sub-{subject}/ses-01/'
+                            f'clean_bundles/sub-{subject}_dwi_space-RASMM_model-CSD_desc-det-afq-{bundle_name}_tractography.trk'
+                        ),
+                        tractogram_filename
+                    )
+                else:
+                    fs.get(
+                        (
+                            f'profile-hcp-west/hcp_reliability/single_shell/'
+                            f'{session.lower()}_afq/'
+                            f'sub-{subject}/ses-01/'
+                            f'clean_bundles/sub-{subject}_dwi_space-RASMM_model-DTI_desc-det-afq-{bundle_name}_tractography.trk'
+                        ),
+                        tractogram_filename
+                    )
             tractogram = load_tractogram(tractogram_filename, 'same')
             streamline_counts[subject][session] = len(tractogram.streamlines)
             tractograms[subject][session] = tractogram
@@ -326,7 +363,7 @@ def get_cluster_dice_coefficients(base_dir, bundle_name, model_names, cluster_na
     return cluster_dice_coef
 
 
-def get_bundle_reliability(base_dir, scalar_data, tractograms):
+def get_bundle_reliability(base_dir, scalar_abr, scalar_data, tractograms):
     import time
     from os.path import exists, join
     import numpy as np
@@ -335,7 +372,7 @@ def get_bundle_reliability(base_dir, scalar_data, tractograms):
     from sklearn.metrics import r2_score
     import matplotlib.pyplot as plt
 
-    test_retest_bundle_profile_fa_r2 = {}
+    test_retest_bundle_profile_r2 = {}
     df = pd.DataFrame(columns=["subject", "time"])
 
     tic = time.perf_counter()
@@ -355,7 +392,7 @@ def get_bundle_reliability(base_dir, scalar_data, tractograms):
             weights=gaussian_weights(tractograms[subject][session_names[1]].streamlines)
         )
 
-        test_retest_bundle_profile_fa_r2[subject] = r2_score(test_fa, retest_fa)
+        test_retest_bundle_profile_r2[subject] = r2_score(test_fa, retest_fa)
         _toc = time.perf_counter()
         print(subject, f'bundle reliability {_toc - _tic:0.4f} seconds')
         df = df.append({
@@ -369,14 +406,14 @@ def get_bundle_reliability(base_dir, scalar_data, tractograms):
         'subject': 'all',
         'time': f'{toc - tic:0.4f}'
     }, ignore_index=True)
-    df.to_csv(join(base_dir, 'get_bundle_reliability_time.csv'))
+    df.to_csv(join(base_dir, f'get_bundle_reliability_{scalar_abr}_time.csv'))
 
-    pd.DataFrame(test_retest_bundle_profile_fa_r2, index=[0]).to_csv(join(base_dir, 'test_retest_bundle_profile_fa_r2.csv'))
-    pd.DataFrame(test_retest_bundle_profile_fa_r2, index=[0]).T[1:].plot(kind='bar', color='tab:orange')
-    plt.savefig(join(base_dir, 'test_retest_bundle_profile_fa_r2.png'))
+    pd.DataFrame(test_retest_bundle_profile_r2, index=[0]).to_csv(join(base_dir, f'test_retest_bundle_profile_{scalar_abr}_r2.csv'))
+    pd.DataFrame(test_retest_bundle_profile_r2, index=[0]).T[1:].plot(kind='bar', color='tab:orange')
+    plt.savefig(join(base_dir, f'test_retest_bundle_profile_{scalar_abr}_r2.png'))
     plt.close()
 
-    return test_retest_bundle_profile_fa_r2
+    return test_retest_bundle_profile_r2
 
 def get_cluster_afq_profiles(scalar_data, cluster_names, cluster_idxs, tractograms):
     from dipy.stats.analysis import afq_profile, gaussian_weights
@@ -483,8 +520,8 @@ def get_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, cluster
     return cluster_profiles
 
 
-def plot_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, model_names, cluster_names):
-    '''plot of test and retest mean afq profiles and 25-75 confidence intervals per cluster in each model'''
+def plot_cluster_reliability(base_dir, bundle_name, scalar_abr, cluster_afq_profiles, model_names, cluster_names):
+    '''plot of test and retest mean afq profiles and confidence intervals per cluster in each model'''
     from os.path import exists, join
     import numpy as np
     import pandas as pd
@@ -494,12 +531,18 @@ def plot_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, model_
     
     df = pd.DataFrame(columns=["session", "model_name", "cluster_name", "subject", "profile"])
 
+    max_value = 0
+
     for subject in subjects:
         for session in session_names:
             ii = 0
             for model_name, model_cluster_names in zip(model_names[subject][session], cluster_names[subject][session]):
                 for cluster_name in model_cluster_names:
                     profile = cluster_afq_profiles[subject][session][ii]
+                    
+                    profile_max_value = profile.max()
+                    if (profile_max_value > max_value):
+                        max_value = profile_max_value
                     
                     df = df.append({
                         'session': session,
@@ -511,9 +554,34 @@ def plot_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, model_
 
                     ii += 1
     
-    # TODO streamline cluster plots
+    # individual streamline cluster plots
+    if False:
+        colors = sns.color_palette()
+        
+        for session in session_names:
+            session_model_names = df.model_name.unique()
+            for model_name in session_model_names:
+                model_cluster_names = df.query(f'session == "{session}" & model_name == "{model_name}"')['cluster_name'].unique()
+                
+                for cluster_name in model_cluster_names:
+                    plt.figure()
+                    df1 = pd.DataFrame(np.array([profile for _, profile in df.query(f'session == "{session}" & model_name == "{model_name}" & cluster_name == {cluster_name}')['profile'].iteritems()]))
+                    sns.lineplot(data=df1.T, alpha=0.05, palette={colors[cluster_name]}, legend=False, dashes=False)
+                    sns.lineplot(data=df1.mean().T, color=colors[cluster_name], legend=False)
+                    plt.ylim(0, max_value*1.01)
+                    plt.xlabel('node')
+                    plt.ylabel(f'{scalar_abr}')
+                    plt.rc('axes', labelsize=14)
+                    plt.title(f'{bundle_name} {session} {model_name} cluster {cluster_name} {scalar_abr} profiles')
+                    plt.savefig(join(base_dir, f'{session}_{model_name}_cluster_{cluster_name}_{scalar_abr}_profiles.png'))
+                    plt.close()
 
     # 95% ci plot
+    # cluster 0, slf 2, blue
+    # cluster 1, slf 3, purple
+    # cluster 2, slf 1, cyan
+    colors = ['tab:blue', 'tab:purple', 'tab:cyan']
+    
     for session in session_names:
         session_model_names = df.model_name.unique()
         for model_name in session_model_names:
@@ -523,11 +591,14 @@ def plot_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, model_
 
             for cluster_name in model_cluster_names:
                 df1 = pd.DataFrame(np.array([profile for _, profile in df.query(f'session == "{session}" & model_name == "{model_name}" & cluster_name == {cluster_name}')['profile'].iteritems()]))
-                df2 = pd.melt(frame=df1, var_name='node', value_name='fa_value')
-                sns.lineplot(data=df2, x='node', y='fa_value')
+                df2 = pd.melt(frame=df1, var_name='node', value_name=f'{scalar_abr}')
+                sns.lineplot(data=df2, x='node', y=f'{scalar_abr}', color=colors[cluster_name])
 
-            plt.title(f'{bundle_name} {session} {model_name} cluster fa profiles')
-            plt.savefig(join(base_dir, f'{session}_{model_name}_cluster_profile_ci.png'))
+            # plt.ylim(0, max_value*1.01)
+            plt.ylim(0.2, 0.6)
+            plt.rc('axes', labelsize=14)
+            # plt.title(f'{bundle_name} {session} {model_name} cluster {scalar_abr} profiles')
+            plt.savefig(join(base_dir, f'{session}_{model_name}_cluster_{scalar_abr}_profile_ci.png'))
             plt.close()
 
 
@@ -584,7 +655,7 @@ def number_of_clusters(cluster_names, subject, session, model_idx):
     return num_clusters[model_idx]
 
 
-def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_dice_coef, bundle_profile_fa_r2, cluster_profile_fa_r2, model_names, cluster_names):
+def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_dice_coef, bundle_profile_fa_r2, cluster_profile_fa_r2, bundle_profile_md_r2, cluster_profile_md_r2, model_names, cluster_names):
     """
     clusters dice and fa r2 bar chart
     """
@@ -601,7 +672,8 @@ def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_d
         df = pd.DataFrame(columns=["hyperparameter", "pair", "dice", "fa_r2"])
 
         dice_matrix = cluster_dice_coef[subject]
-        profile_matrix = cluster_profile_fa_r2[subject]
+        fa_profile_matrix = cluster_profile_fa_r2[subject]
+        md_profile_matrix = cluster_profile_md_r2[subject]
 
         i = 0
         for model_num in range(number_of_models(model_names, subject, session_names[1])):
@@ -623,7 +695,8 @@ def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_d
                     "cluster": (n_clusters*model_num)+k,
                     "pair": dice_pair,
                     "dice": dice_matrix[ij_slice][dice_pair],
-                    "fa_r2": profile_matrix[ij_slice][dice_pair]
+                    "fa_r2": fa_profile_matrix[ij_slice][dice_pair],
+                    "md_r2": md_profile_matrix[ij_slice][dice_pair]
                 }, ignore_index=True)
                 k += 1
 
@@ -635,49 +708,33 @@ def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_d
     for subject in subjects:
         df = summary_dfs[subject]
         df['subject'] = subject
-        # df.index.name='idx'
         frames.append(df)
-    bundle_df = pd.concat(frames).groupby('cluster').agg({'dice': ['mean', 'std'], 'fa_r2': ['mean', 'std']})
+    bundle_df = pd.concat(frames).groupby('cluster').agg({'dice': ['mean', 'std'], 'fa_r2': ['mean', 'std'], 'md_r2': ['mean', 'std']})
     bundle_df.to_csv(join(base_dir, f'{bundle_name}_summary.csv'))
 
-    fig, ax = plt.subplots(figsize=(20,4))
-    ax.set_ylabel('dice')
+    fig, ax = plt.subplots(figsize=(20,7))
+    ax.set_ylabel('reliability')
 
-    ax2 = ax.twinx()
-    ax2.set_ylabel('fa $r^2$')
-    
-    bundle_df.dice.plot(kind='bar', y='mean', ax=ax, color='tab:blue', edgecolor='k', label='mean dice', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5), legend=False, width=0.25, position=1)
-    bundle_df.fa_r2.plot(kind='bar', y='mean', ax=ax2, color='tab:orange', edgecolor='k', label='mean fa $r^2$', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5),legend=False, width=0.25, position=0)
+    bundle_df.dice.plot(kind='bar', y='mean', ax=ax, color='tab:blue', edgecolor='k', label='mean dice', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5), legend=False, width=0.25, position=0)
+    bundle_dice_mean = np.mean(list(bundle_dice_coef.values()))
+    ax.hlines(bundle_dice_mean, 0, len(bundle_df.index), colors='tab:blue', linestyles='dashed', label='bundle dice')
+    ax.text(1.01, bundle_dice_mean+0.01, float("{0:.4f}".format(bundle_dice_mean)), va='bottom', ha='left', bbox=dict(facecolor='tab:blue', alpha=0.5), transform=ax.get_yaxis_transform())
 
-    # add bundle dice and fa r2 lines
-    ax.hlines(np.mean(list(bundle_dice_coef.values())), 0, len(bundle_df.index), colors='tab:blue', linestyles='dashed')
-    ax.hlines(np.mean(list(bundle_profile_fa_r2.values())), 0, len(bundle_df.index), colors='tab:orange', linestyles='dashed')
+    bundle_df.fa_r2.plot(kind='bar', y='mean', ax=ax, color='tab:orange', edgecolor='k', label='mean fa $r^2$', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5),legend=False, width=0.25, position=-1)
+    bundle_fa_mean = np.mean(list(bundle_profile_fa_r2.values()))
+    ax.hlines(bundle_fa_mean, 0, len(bundle_df.index), colors='tab:orange', linestyles='dashed', label='bundle fa $r^2$')
+    ax.text(1.01, bundle_fa_mean-0.01, float("{0:.4f}".format(bundle_fa_mean)), va='top', ha='left', bbox=dict(facecolor='tab:orange', alpha=0.5), transform=ax.get_yaxis_transform())
 
-    # TODO x-axes for now not crictical
-    
-    ax.set_xlabel('cluster')
-#     ax.set_xticklabels(getxticklabels(), rotation=0)
+    bundle_df.md_r2.plot(kind='bar', y='mean', ax=ax, color='tab:green', edgecolor='k', label='mean md $r^2$', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5),legend=False, width=0.25, position=-2)
+    bundle_md_mean = np.mean(list(bundle_profile_md_r2.values()))
+    ax.hlines(bundle_md_mean, 0, len(bundle_df.index), colors='tab:green', linestyles='dashed', label='bundle md $r^2$')
+    ax.text(1.01, bundle_md_mean-0.01, float("{0:.4f}".format(bundle_md_mean)), va='top', ha='left', bbox=dict(facecolor='tab:green', alpha=0.5), transform=ax.get_yaxis_transform())
 
-#     ax1 = ax.twiny()
-#     ax1.xaxis.set_ticks_position('bottom')
-#     ax1.spines["bottom"].set_position(("axes", -0.25))
-#     ax1.set_xticks(range(len(df.index)))
-
-#     ax1.xaxis.set_major_locator(FixedLocator(getmodelxticklocations()))
-#     ax1.set_xticklabels(df['hyperparameter'].unique())
-#     ax1.set_xlabel('hyperparameter group')
-#     ax1.xaxis.set_label_position("bottom")
-    
-#     ax3 = ax.twiny()
-#     ax3.xaxis.set_ticks_position('bottom')
-#     ax3.spines["bottom"].set_position(("axes", -0.25))
-#     ax3.set_xticks(range(len(bundle_df.index)))
-# #     ax3.xaxis.set_major_locator(FixedLocator([i for i in range(len(df.index)) if i not in [i for i in range(len(df.index))[1:len(df.index):3]]]))
-#     ax3.tick_params(labelbottom=False, direction='in') 
+    ax.set_xlabel('model:cluster\nmodels: (0:MDF, 1:MDF+FA $R^2$, 2:MDF+FA $R^2$+MD $R^2$)')
+    ax.set_xticklabels(['0:0','0:1','0:2','1:0','1:1','1:2','2:0','2:1','2:2'], rotation=0)
 
     fig.legend()
     plt.title(f'Test-Retest {bundle_name} (N={len(subjects)})')
-    # plt.show()
     plt.savefig(join(base_dir, f'test-retest_model_comparision.png'))
     plt.close()
 
@@ -766,3 +823,5 @@ def anatomy_visualizations(base_dir, bundle_name, subject, model_names, cluster_
             print(f_name)
             plt.savefig(f_name)
             plt.close()
+
+    return 1
