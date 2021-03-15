@@ -427,7 +427,16 @@ def get_cluster_afq_profiles(scalar_data, cluster_names, cluster_idxs, tractogra
         for session in session_names:
             cluster_afq_profiles[subject][session] = {}
             ii = 0
+            print(subject, session)
             for model_cluster_name, model_cluster_idxs in zip(cluster_names[subject][session], cluster_idxs[subject][session]):
+                # NOTE:
+                # code assumes cluster names are ordered and indexed: 0, 1, ...
+                # however with relabeling clusters across subjects still ordered,
+                # but no longer gauranteed to have a cluster 0, so:
+                # • do I update this to use index instead of cluster name?
+                # • do I add empty cluster profiles when cluster does not exist?
+                # • do I skip until ii = cluster_name? what happens when multiple models??
+                # • or just leave this code alone and calculate profiles in indentify_subbundles.
                 for cluster_name in model_cluster_name:
                     fa_scalar_data = scalar_data[subject][session]
                     cluster_streamlines = tractograms[subject][session].streamlines[model_cluster_idxs[cluster_name]]
