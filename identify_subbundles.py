@@ -722,10 +722,34 @@ def move_centriods_to_MNI(data_dir, subjects, centroids):
     
     return mni_centriods
 
-def calculate_centroid_MDF():
-    ### TODO: calculate matrix of centroid MDF
+def match_clusters_by_centroid_MDF(base_dir, data_dir, model_name, centriods, target, sources):
+    """
+    """
+    import numpy as np
+    import itertools
+    from dipy.tracking.streamline import bundles_distances_mdf
+
     # For each subject pair compute the adjacency matrix
-    return
+    for source in sources:
+        pairwise_mdf = np.array([])
+            
+        # calculate distance between source and target centroids
+        for (source_centriod, target_centroid) in itertools.product(centriods[source], centriods[target]):
+            mdf = bundles_distances_mdf(source_centriod.streamlines, target_centroid.streamlines)
+            pairwise_mdf = np.append(pairwise_mdf, mdf)
+
+        pairwise_shape = (len(centriods[source]), len(centriods[target]))
+        block = pairwise_mdf.reshape(pairwise_shape)
+        # print(target, source, block)
+
+        # TODO want to minimize the trace 
+        target_labels = np.argmax(block, axis=1)
+
+        source_subbundle_base_dir = join(base_dir, source, data_dir)
+        original_cluster_labels = np.load(join(source_subbundle_base_dir, f'{model_name}_idx.npy'))
+        new_cluster_labels = relabel_clusters(original_cluster_labels, target_labels)
+        print(target, source, new_cluster_labels)
+        np.save(join(source_subbundle_base_dir, f'{target}_mdf_idx.npy'), new_cluster_labels)
 
 ###############################################################################
 
@@ -893,7 +917,7 @@ def load_labeled_clusters(base_dir, data_dir, model_name, subjects):
     return (cluster_idxs, cluster_names)
 
 
-def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target, munkres=True):
+def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target, algorithm=None):
     """
     Load the subjects clusters using labels from target subject.
     If the subject is the target then loads the original labels.
@@ -904,6 +928,7 @@ def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target, mu
 
     `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{model_name}_idx.npy`
     `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{target}_munkres_idx.npy`
+    `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{target}_mdf_idx.npy`
     `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{target}_idx.npy`
 
     see `load_labeled_clusters`
@@ -918,10 +943,10 @@ def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target, mu
     for subject in subjects:
         if subject == target:
             cluster_filename = f'{model_name}_idx.npy'
-        elif munkres:
-            cluster_filename = f'{target}_munkres_idx.npy'
-        else:
+        elif algorithm is None:
             cluster_filename = f'{target}_idx.npy'
+        else:
+            cluster_filename = f'{target}_{algorithm}_idx.npy'
 
         cluster_file = join(base_dir, subject, data_dir, cluster_filename)
 
