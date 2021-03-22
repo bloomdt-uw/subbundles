@@ -1,3 +1,10 @@
+"""
+code snippets (gists) to run in python intepreter
+
+intended to generate subject and population visualizations from cluster model
+studys published to aws s3
+"""
+
 ############
 # process multiple bundles
 
@@ -73,5 +80,6 @@ pd.DataFrame({'HCP_1200':df.apply(lambda x: np.subtract(x['HCP_1200 0'],x['HCP_1
 
 ############
 
-import importlib
-importlib.reload(visualizations)
+# reload library in python interpreter so don't have to rerun all commands
+# import importlib
+# importlib.reload(visualizations)

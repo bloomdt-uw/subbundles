@@ -1,6 +1,18 @@
+"""
+code snippets (gists) to run in python intepreter
+
+simplification of visualization_gist.py
+
+intended to generate subject and population visualizations from SLF_L 
+cluster model studys published to aws s3.
+
+used for OHBM abstract.
+"""
+
 from visualizations import *
 from os import makedirs
 from os.path import join
+
 bundle_name = 'SLF_L'
 base_dir = join('subbundles', 'HCP_test_retest', bundle_name)
 for subject in subjects:

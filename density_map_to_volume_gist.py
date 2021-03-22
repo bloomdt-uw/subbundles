@@ -1,3 +1,14 @@
+"""
+code snippets (gists) to run in python intepreter
+
+script from arokem to visualize cluster density maps as a volumes
+
+test-retest cluster density maps were generated in MI-Brain
+this combines and visualize structure
+
+TODO was going generate density maps automatically using clean_cluster_trk.union()
+"""
+
 from dipy.viz import window, actor, colormap as cmap
 import nibabel as nib
 thresh = 0.5
@@ -30,4 +41,4 @@ scene.add(ROI3_actor)
 # Save figures
 scene.set_camera(position=[-1, 0, 0], focal_point=[0, 0, 0], view_up=[0, 0, 1])
 window.show(scene)
-window.record(scene, n_frames=1, out_path='rois.png', size=(800, 800))
+window.record(scene, n_frames=1, out_path='volume.png', size=(800, 800))

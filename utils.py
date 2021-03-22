@@ -1,3 +1,7 @@
+"""
+utility functions for the subbundle[1-7].ipynb
+"""
+
 import os
 import os.path as op
 

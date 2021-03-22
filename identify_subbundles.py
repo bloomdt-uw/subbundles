@@ -1,27 +1,25 @@
-###############################################################################
-###############################################################################
-# Now that have clusters for each subject, from one or more expirements/models,
-# (see subbundle_aws.ipynb):
-#
-# Data driven approach to identify subbundles across subjects from HCP_1200
-# (the HCP dataset test session)
-# • Move each subjects cluster into MNI space
-# • Calculate weighted dice coefficient to identify cluster similarity across
-#   subjects. For each subject pair results in NxM matrix where N is number of
-#   clusters in first subject and M is number of clusters in second subject.
-# • Find the optimal cluster alignment for given subject pair using maximal
-#   trace on the NxM matrix. This approach will preserve at least min(N,M) 
-#   clusters.
-# • Choose a target subject and find relabeling for all other subjects in 
-#   dataset. Then calculate the cluster profiles with new label. Iterate
-#   through all subjects as the target subject. This 'Leave one out' approach
-#   should identify the 'consensus subject' for dataset -- which is the subject
-#   with minimum variance across cluster profiles.
-# • Using same consensus subject recalculate labels for HCP_retest (the HCP
-#   dataset retest session).
-# • Then conduct test-retest relability analysis as in visualizations.py
-###############################################################################
-###############################################################################
+"""
+Now that have clusters for each subject, from one or more expirements/models,
+(see subbundle_aws.ipynb):
+
+Data driven approach to identify subbundles across subjects from HCP_1200
+(the HCP dataset test session)
+• Move each subjects cluster into MNI space
+• Calculate weighted dice coefficient to identify cluster similarity across
+  subjects. For each subject pair results in NxM matrix where N is number of
+  clusters in first subject and M is number of clusters in second subject.
+• Find the optimal cluster alignment for given subject pair using maximal
+  trace on the NxM matrix. This approach will preserve at least min(N,M) 
+  clusters.
+• Choose a target subject and find relabeling for all other subjects in 
+  dataset. Then calculate the cluster profiles with new label. Iterate
+  through all subjects as the target subject. This 'Leave one out' approach
+  should identify the 'consensus subject' for dataset -- which is the subject
+  with minimum variance across cluster profiles.
+• Using same consensus subject recalculate labels for HCP_retest (the HCP
+  dataset retest session).
+• Then conduct test-retest relability analysis as in visualizations.py
+"""
 
 ###############################################################################
 ###############################################################################
@@ -1322,48 +1320,51 @@ def cluster_reliability(base_dir, data_dirs, model_name, subjects, bundle_name, 
 
     viz.plot_cluster_reliability(base_dir, bundle_name, 'fa', cluster_afq_profiles, model_names, cluster_names)
 
+"""
+WIP
+"""
+# def population_reliability(base_dir, data_dirs, model_name, subjects, bundle_name, target):
+#     """
+#     Plot the bar chart
 
-def population_reliability(base_dir, data_dirs, model_name, subjects, bundle_name, target):
-    """
-    Plot the bar chart
-    """
-    # TODO NOT FINISHED PORTING
-    import visualizations as viz
-    from os.path import join
-    import numpy as np
+#     TODO NOT FINISHED PORTING from visualizations.py
+#     """
+#     import visualizations as viz
+#     from os.path import join
+#     import numpy as np
 
-    fa_scalar_data = viz.load_fa_scalar_data(base_dir)
-    md_scalar_data = viz.load_md_scalar_data(base_dir)
-    tractograms = viz.load_tractograms(base_dir, bundle_name)
-    model_names, _, cluster_idxs, cluster_names, _ = viz.load_clusters(base_dir, bundle_name)
+#     fa_scalar_data = viz.load_fa_scalar_data(base_dir)
+#     md_scalar_data = viz.load_md_scalar_data(base_dir)
+#     tractograms = viz.load_tractograms(base_dir, bundle_name)
+#     model_names, _, cluster_idxs, cluster_names, _ = viz.load_clusters(base_dir, bundle_name)
 
-    for subject in subjects:
-        for data_dir in data_dirs:
-            model_names[subject][data_dir] = ['mase_fa_r2_is_mdf']
+#     for subject in subjects:
+#         for data_dir in data_dirs:
+#             model_names[subject][data_dir] = ['mase_fa_r2_is_mdf']
 
-    for subject in subjects:
-        for data_dir in data_dirs:
-            _cluster_idxs, _cluster_names = load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target)
-            cluster_idxs[subject][data_dir] = [_cluster_idxs[subject]]
-            cluster_names[subject][data_dir] = [_cluster_names[subject]]
+#     for subject in subjects:
+#         for data_dir in data_dirs:
+#             _cluster_idxs, _cluster_names = load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target)
+#             cluster_idxs[subject][data_dir] = [_cluster_idxs[subject]]
+#             cluster_names[subject][data_dir] = [_cluster_names[subject]]
 
-    cluster_afq_profiles = get_cluster_afq_profiles(base_dir, data_dirs, model_name, subjects, bundle_name, target)
+#     cluster_afq_profiles = get_cluster_afq_profiles(base_dir, data_dirs, model_name, subjects, bundle_name, target)
 
-    bundle_dice_coef = viz.get_bundle_dice_coefficients(base_dir, tractograms)
+#     bundle_dice_coef = viz.get_bundle_dice_coefficients(base_dir, tractograms)
 
-    # TODO calculate cluster_dice_coef
-    # cluster_dice_coef = viz.get_cluster_dice_coefficients(base_dir, bundle_name, model_names, cluster_names)
+#     # TODO calculate cluster_dice_coef
+#     # cluster_dice_coef = viz.get_cluster_dice_coefficients(base_dir, bundle_name, model_names, cluster_names)
 
-    bundle_profile_fa_r2 = viz.get_bundle_reliability(base_dir, 'fa', fa_scalar_data, tractograms)
+#     bundle_profile_fa_r2 = viz.get_bundle_reliability(base_dir, 'fa', fa_scalar_data, tractograms)
 
-    cluster_profile_fa_r2 = viz.get_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, cluster_names)
+#     cluster_profile_fa_r2 = viz.get_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, cluster_names)
 
-    # ignore md for now
-    bundle_profile_md_r2 = {}
-    cluster_profile_md_r2 = {}
+#     # ignore md for now
+#     bundle_profile_md_r2 = {}
+#     cluster_profile_md_r2 = {}
 
-    for subject in subjects:
-        bundle_profile_md_r2[subject] = 0.0
-        cluster_profile_md_r2[subject] = np.zeros((3,3))
+#     for subject in subjects:
+#         bundle_profile_md_r2[subject] = 0.0
+#         cluster_profile_md_r2[subject] = np.zeros((3,3))
 
-    viz.population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_dice_coef, bundle_profile_fa_r2, cluster_profile_fa_r2, bundle_profile_md_r2, cluster_profile_md_r2, model_names, cluster_names)
+#     viz.population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_dice_coef, bundle_profile_fa_r2, cluster_profile_fa_r2, bundle_profile_md_r2, cluster_profile_md_r2, model_names, cluster_names)

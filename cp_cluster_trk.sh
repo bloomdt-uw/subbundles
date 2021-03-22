@@ -1,4 +1,18 @@
 #!/bin/bash
+# one off shell script to copy test and retest tracking files from aws
+# finds subjects from existing local directory
+#
+# WARNING aws bucket has been restructured 
+#  * must specify the study in the remote path
+#
+# WARNING script assumptions include:
+#  * local study directory exists
+#  * script is run from the bundle directory in local study directory
+#  * only for SLF_L bundle (could fix this with shell argument)
+#  * only for number of clusters is 3
+#  * only for mase fa r2 is mdf model
+#
+# THERE ARE NO CHECKS TO VALIDATE THESE ASSUMPTIONS
 for d in $(ls -d */)
 do 
     d=${d%?}

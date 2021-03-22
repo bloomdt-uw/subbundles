@@ -1,3 +1,9 @@
+"""
+code snippets (gists) to run in python intepreter
+
+code to ensure was correctly calculating cluster profile confidence intervals
+"""
+
 ### rerun profile plots
 from visualizations import *
 from os import makedirs
@@ -26,7 +32,7 @@ for subject in subjects:
         ii = 0
         for model_name, model_cluster_names in zip(model_names[subject][session], cluster_names[subject][session]):
             for cluster_name in model_cluster_names:
-                profile = cluster_afq_fa_profiles[subject][session][ii]
+                profile = cluster_afq_profiles[subject][session][ii]
                 df = df.append({
                     'session': session,
                     'model_name': model_name,
@@ -85,6 +91,7 @@ plt.show()
 
 # bundle mean and std
 import numpy as np
+bundle_profile_fa_r2 = get_bundle_reliability(base_dir, fa_scalar_data, tractograms)
 np.mean(list(bundle_profile_fa_r2.values()))
 np.std(list(bundle_profile_fa_r2.values()))
 

@@ -1,4 +1,14 @@
+"""
+clean the cluster tractogram. 
 
+used to generate subbundle anatomical visualizations for the OHBM abstract
+
+NOTE assumes tracking files are local
+
+NOTE see cp_cluster_trk.sh
+
+TODO combine clean subbundles trk files into workflow with model result output
+"""
 
 subjects = [
     '103818', '105923', '111312', '114823', '115320',
@@ -14,16 +24,21 @@ subjects = [
 
 sessions = ['HCP_1200', 'HCP_Retest']
 
-# from os.path import exists, join
-# for subject in subjects:
-#     for session in sessions:
-#         for cluster in ['0', '1', '2']:
-#             f_name = join('./subbundles/HCP_test_retest/SLF_L/', subject, session, f'mase_fa_r2_is_mdf_cluster_{cluster}.trk')
-#             if exists(f_name):
-#                 clean(f_name)
-
-
 def clean(tractogram_filename):
+    """
+    usage gist
+
+    import clean_cluster_trk
+    from os.path import exists, join
+
+    for subject in subjects:
+        for session in sessions:
+            for cluster in ['0', '1', '2']:
+                f_name = join('./subbundles/HCP_test_retest/SLF_L/', subject, session, f'mase_fa_r2_is_mdf_cluster_{cluster}.trk')
+                if exists(f_name):
+                    clean(f_name)
+    """
+
     from os.path import splitext
     from dipy.io.streamline import load_tractogram, save_tractogram
     from dipy.io.stateful_tractogram import StatefulTractogram
@@ -38,10 +53,15 @@ def clean(tractogram_filename):
 
     save_tractogram(sft, base+'_clean'+ext, False)
 
-def union(test_tractogram_filename, retest_tractogram_filename):
-    from dipy.io.streamline import load_tractogram, save_tractogram
+"""
+WIP
+"""
+# def union(test_tractogram_filename, retest_tractogram_filename):
+#     """
+#     TODO was going to create density maps representing overlap
+#     NOTE see density_map_to_volume.py
+#     """
+#     from dipy.io.streamline import load_tractogram, save_tractogram
 
-    test_tractogram = load_tractogram(test_tractogram_filename, 'same')
-    retest_tractogram = load_tractogram(retest_tractogram_filename, 'same')
-
-    # todo fdata find overlap
+#     test_tractogram = load_tractogram(test_tractogram_filename, 'same')
+#     retest_tractogram = load_tractogram(retest_tractogram_filename, 'same')

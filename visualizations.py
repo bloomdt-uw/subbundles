@@ -1,3 +1,9 @@
+"""
+visualization utilities for creating:
+ * cluster profile reliabilty plots
+ * model reliability comparision bar plots
+ * anatomical images
+"""
 # does not exist for 662551
 subjects = [
     '103818', '105923', '111312', '114823', '115320',
