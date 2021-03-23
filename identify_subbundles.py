@@ -1,5 +1,5 @@
 """
-Now that have clusters for each subject, from one or more expirements/models,
+Now that have clusters for each subject, from one or more experiments/models,
 (see subbundle_aws.ipynb):
 
 Data driven approach to identify subbundles across subjects from HCP_1200
@@ -895,7 +895,7 @@ def load_labeled_clusters(base_dir, data_dir, model_name, subjects):
 
     NOTE: looks for the original cluster labels locally in
 
-    `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{model_name}_idx.npy`
+    `./{base_dir}/{subject}/{data_dir}/{model_name}_idx.npy`
 
     see `vizualizations.load_clusters`
     """
@@ -924,10 +924,10 @@ def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target, al
 
     NOTE: Looks for following files:
 
-    `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{model_name}_idx.npy`
-    `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{target}_munkres_idx.npy`
-    `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{target}_mdf_idx.npy`
-    `./subbundles/{experiment_name}/{bundle_name}/{subject}/{data_dir}/{target}_idx.npy`
+    `./{base_dir}/{subject}/{data_dir}/{model_name}_idx.npy`
+    `./{base_dir}/{subject}/{data_dir}/{target}_munkres_idx.npy`
+    `./{base_dir}/{subject}/{data_dir}/{target}_mdf_idx.npy`
+    `./{base_dir}/{subject}/{data_dir}/{target}_idx.npy`
 
     see `load_labeled_clusters`
     TODO: duplicates much of logic; combine with load_labeled_clusters
@@ -1013,9 +1013,6 @@ def get_bundle_afq_profiles(base_dir, data_dir, subjects, bundle_name):
     Calculate the weighted afq profile for each subjects bundle.
 
     Return array of arrays with each subjects weighted afq profile.
-
-    NOTE: Current usage of global variables: `subjects`, `experiment_name`
-    and `bundle_name`
     """
     from os.path import join
     from dipy.stats.analysis import afq_profile, gaussian_weights
