@@ -535,7 +535,7 @@ def get_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, cluster
     return cluster_profiles
 
 
-def plot_cluster_reliability(base_dir, bundle_name, scalar_abr, cluster_afq_profiles, model_names, cluster_names):
+def plot_cluster_reliability(base_dir, session_names, subjects, bundle_name, scalar_abr, cluster_afq_profiles, model_names, cluster_names, n_clusters):
     '''plot of test and retest mean afq profiles and confidence intervals per cluster in each model'''
     from os.path import exists, join
     import numpy as np
@@ -551,7 +551,7 @@ def plot_cluster_reliability(base_dir, bundle_name, scalar_abr, cluster_afq_prof
     for subject in subjects:
         for session in session_names:
             ii = 0
-            for model_name, model_cluster_names in zip(model_names[subject][session], cluster_names[subject][session]):
+            for model_name, model_cluster_names in zip(model_names[subject][session][n_clusters], cluster_names[subject][session][n_clusters]):
                 for cluster_name in model_cluster_names:
                     profile = cluster_afq_profiles[subject][session][ii]
                     
