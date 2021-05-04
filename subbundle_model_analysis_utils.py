@@ -7,17 +7,35 @@ logger = logging.getLogger('subbundle')
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-def fetch_model_data(expirement_name, subjects, session_names, bundle_names, cluster_numbers):
+def fetch_model_data(metadata):
     """
     set up local directory and download necessary files for model analysis
 
+    - for each bundle:
+        - scalars
+            `{expirement_name}/{bundle_name}/{subject}/{session}/{scalar}`
+        - tractogram
+            `{expirement_name}/{bundle_name}/{subject}/{session}/{bundle_name}.trk`
+        - for each cluster:
+            - cluster labels
+                `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_idx.npy`
+            - cluster tractogram
+                `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_cluster_{cluster_label}.trk`
+
+    generates:
+    - clean cluster tractogram
+    - cluster tractogram density map
+    - clean cluster tractogram density map
+
+    TODO: verify that need to generate density maps -- since going to compare clusters in MNI space
+
+    TODO: download the adjacency matricies, streamline profiles, and model_info.pkl
+
+    TODO: pair-plots and silhouette scores
+
     Parameters
     ----------
-    expirement_name : string
-    subjects : list
-    session_names : list
-    bundle_names : list
-    cluster_numbers : list
+    metadata : dict
 
     Returns
     -------
@@ -34,33 +52,44 @@ def fetch_model_data(expirement_name, subjects, session_names, bundle_names, clu
 
     model_data = {}
 
-    for bundle_name in bundle_names:
+    for bundle_name in metadata['experiment_bundles']:
         model_data[bundle_name] = {}
 
-        base_dir = join('subbundles', expirement_name, bundle_name)
+        base_dir = join(metadata['experiment_output_dir'], bundle_name)
 
         # ensure local directories exist
-        for subject in subjects:
-            for session in session_names:
-                for cluster_number in cluster_numbers:
+        for subject in metadata['experiment_subjects']:
+            for session in metadata['experiment_sessions']:
+                for cluster_number in metadata['experiment_range_n_clusters']:
                     makedirs(join(base_dir, subject, session, str(cluster_number)), exist_ok=True)
         
         logger.log(logging.INFO, f'Download {bundle_name} data from HCP reliability study')
+        
         # NOTE since organized by bundle then by subject this downloads the subjects
         # data multiple times, really only need it once per subject/session and not
         # for each bundle. this is inefficent computationally, bandwidth, and storage,
         # may want to reconsider how best to orgainizes.
-        # TODO for moment assuming that model is using both FA and MD tissue properties;
-        # in future should inspect model metadata to determine scalars
-        model_data[bundle_name]['fa_scalar_data'] = _download_scalar_data('FA', base_dir, subjects, session_names)
-        model_data[bundle_name]['md_scalar_data'] = _download_scalar_data('MD', base_dir, subjects, session_names)
-        model_data[bundle_name]['tractograms'] = _download_bundle_tractograms(base_dir, subjects, session_names, bundle_name)
 
-        logger.log(logging.INFO, f'Download {bundle_name} clustering models for K={cluster_numbers}')
+        for scalar in metadata['model_scalars']:
+            scalar_abr = scalar.split('.')[0]
+            model_data[bundle_name][f'{scalar_abr.lower()}_scalar_data'] = _download_scalar_data(
+                scalar, base_dir, metadata['experiment_subjects'], metadata['experiment_sessions']
+            )
+
+        model_data[bundle_name]['tractograms'] = _download_bundle_tractograms(
+            base_dir, metadata['experiment_subjects'], metadata['experiment_sessions'], bundle_name
+        )
+
+        logger.log(logging.INFO, f"Download {bundle_name} clustering models for K={metadata['experiment_range_n_clusters']}")
         (model_names, _, cluster_idxs, cluster_names, _, 
         cluster_tractograms, cluster_tractograms_clean, 
         cluster_denisty_maps, cluster_denisty_maps_clean) = _download_clusters(
-            expirement_name, base_dir, subjects, session_names, bundle_name, cluster_numbers
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters']
         )
         
         model_data[bundle_name]['model_names'] = model_names
@@ -165,15 +194,19 @@ def get_density_map(tractogram, tractogram_filename):
 
     return density_map_img, density_map_filename
 
-def _download_scalar_data(scalar_name, base_dir, subjects, session_names, use_csd=True):
+def _download_scalar_data(scalar, base_dir, subjects, session_names, use_csd=True):
     """
-    Download scalar data for `scalar_name` for all subjects and sessions from the
-    single shell HCP reliability study. By default will download the csd scalar data.
+    Download scalar data for `scalar` for all subjects and sessions from the
+    single shell HCP reliability study.
+
+        `{expirement_name}/{bundle_name}/{subject}/{session}/{scalar}`
+    
+    By default will download the CSD scalar data.
 
     Parameters
     ----------
     scalar_name : string
-        either 'FA' or 'MD'
+        either 'DTI_FA.nii.gz' or 'DTI_MD.nii.gz'
     base_dir : string
     subjects : array
     session_names : array
@@ -198,14 +231,12 @@ def _download_scalar_data(scalar_name, base_dir, subjects, session_names, use_cs
 
     fs = s3fs.S3FileSystem()
 
-    scalar_basename = f'{scalar_name}.nii.gz'
-
     scalar_data = {}
 
     for subject in subjects:
         scalar_data[subject] = {}
         for session in session_names:
-            scalar_filename = join(base_dir, subject, session, scalar_basename)
+            scalar_filename = join(base_dir, subject, session, scalar)
             if not exists(scalar_filename):
                 logger.log(logging.DEBUG, f'downloading {scalar_filename}')
                 fs.get(
@@ -213,7 +244,7 @@ def _download_scalar_data(scalar_name, base_dir, subjects, session_names, use_cs
                         f'profile-hcp-west/hcp_reliability/single_shell/'
                         f'{session.lower()}_afq{csd_suffix}/'
                         f'sub-{subject}/ses-01/'
-                        f'sub-{subject}_dwi_model-DTI_{scalar_name}.nii.gz'
+                        f'sub-{subject}_dwi_model-{scalar}'
                     ),
                     scalar_filename
                 )
@@ -226,10 +257,14 @@ def _download_scalar_data(scalar_name, base_dir, subjects, session_names, use_cs
 
 def _download_bundle_tractograms(base_dir, subjects, session_names, bundle_name, use_csd=True, use_clean=True, generate_metadata=False):
     """
-    Download the bundle tractogram for all subjects and sessions from the single shell
-    HCP reliabilty study. By default will download clean csd tractograms.
+    Download the bundle tractogram for all subjects and sessions from the 
+    single shell HCP reliabilty study.
 
-    Will optionally create `streamline_counts.csv` and `streamline_counts.png` in 
+        `{expirement_name}/{bundle_name}/{subject}/{session}/{bundle_name}.trk`
+    
+    By default will download clean CSD tractograms.
+
+    Optionally genereates `streamline_counts.csv` and `streamline_counts.png` in 
     `base_dir`.
 
     Parameters
@@ -318,6 +353,9 @@ def _download_clusters(expirement_name, base_dir, subjects, session_names, bundl
     """
     Download all cluster assignment files for the given expirement. This is for each bundle for each subject, 
     session, and desired number of clusters.
+
+        `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_idx.npy`
+        `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_cluster_{cluster_label}.trk`
 
     optionally generates three csv files: `model_names.csv`, `cluster_names.csv`, and `cluster_counts.csv`
     in `base_dir`

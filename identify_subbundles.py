@@ -28,12 +28,119 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 ###############################################################################
 ###############################################################################
+# Helper function
+###############################################################################
+###############################################################################
+
+def get_cluster_info(metadata, bundle_name):
+    """
+    NOTE: Only uses `Algorithm.MUNKRES`
+
+    Returns
+    -------
+    cluster_info : dictionary `n_clusters` key
+    └── values dictionary with following keys : 
+        `consensus_subject`, `centriods`, `tractograms_filenames`, `tractograms`
+        └── `consensus_subject` : `subject_id`
+        └── `centriods` : dictionary with `subject_id`
+            └── values centroid `StatefulTratogram` array of length `n_clusters`
+        └── `consensus_subject` : dictionary with `subject_id`
+            └── tractogram filename array of length `n_clusters`
+        └── `consensus_subject` : dictionary with `subject_id`
+            └── `StatefulTractogram` array of length n_clusters
+    """
+    from os.path import join
+
+    cluster_info = {}
+
+    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        cluster_info[n_clusters] = {}
+    
+        # consensus_subject
+        cluster_info[n_clusters]['consensus_subject'] = _find_consensus_subject(
+            base_dir,
+            metadata['experiment_test_session'], 
+            metadata['model_name'],
+            metadata['experiment_subjects'],
+            bundle_name,
+            n_clusters
+        )
+    
+        # centroids (test session) (original - streamline count)
+        prealign_centroids = _prealignment_centroids(
+            base_dir,
+            metadata['experiment_test_session'],
+            metadata['model_name'],
+            metadata['experiment_subjects'],
+            bundle_name,
+            n_clusters
+        )
+        
+        cluster_info[n_clusters]['centroids'] = _move_centroids_to_MNI(
+            metadata['experiment_test_session'],
+            metadata['experiment_subjects'],
+            prealign_centroids
+        )
+        
+        # tractograms (test session)
+        tractogram_dict, tractograms_filename_dicts = _load_MNI_cluster_tractograms(
+            base_dir,
+            metadata['experiment_test_session'],
+            metadata['model_name'],
+            metadata['experiment_subjects'],
+            bundle_name,
+            n_clusters
+        )
+        
+        cluster_info[n_clusters]['tractograms_filenames'] = tractograms_filename_dicts
+        cluster_info[n_clusters]['tractograms'] = tractogram_dict
+
+    return cluster_info
+
+
+def get_relabeled_centroids(metadata, bundle_name, n_clusters, consensus, algorithm):
+    """
+    NOTE: May want to add this directly to `cluster_info`
+    """
+    from os.path import join
+
+    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+
+    cluster_idxs, cluster_names = _load_relabeled_clusters(
+        base_dir,
+        metadata['experiment_test_session'],
+        metadata['model_name'],
+        metadata['experiment_subjects'],
+        n_clusters,
+        consensus,
+        algorithm=algorithm
+    )
+
+    relabeled_centroids = _relabeled_centroids(
+        base_dir,
+        metadata['experiment_test_session'],
+        metadata['experiment_subjects'],
+        bundle_name,
+        cluster_idxs,
+        cluster_names
+    )
+
+    return _move_centroids_to_MNI(
+        metadata['experiment_test_session'],
+        metadata['experiment_subjects'],
+        relabeled_centroids
+    )
+
+###############################################################################
+###############################################################################
 # Step 0:
 # • Move clusters into MNI space
 ###############################################################################
 ###############################################################################
 
-def move_tractogram_to_MNI_space(data_dir, subject, tractogram):
+def _move_tractogram_to_MNI_space(data_dir, subject, tractogram):
     """
     For given subject and tractogram move that tractogram from subject space
     to MNI space using existing AFQ derivatives.
@@ -211,7 +318,7 @@ def move_tractogram_to_MNI_space(data_dir, subject, tractogram):
     return sft
 
 
-def load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
+def _load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
     """
     Ensure all cluster tractograms are in MNI for all subjects.
 
@@ -287,7 +394,7 @@ def load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundl
 
                 tractogram = load_tractogram(tractogram_file, 'same')
 
-                sft = move_tractogram_to_MNI_space(data_dir, subject, tractogram)
+                sft = _move_tractogram_to_MNI_space(data_dir, subject, tractogram)
 
                 ## Save tractogram to visually inspect in MI Brain
                 # NOTE: remember to globally reinitize MI-Brain 
@@ -314,7 +421,7 @@ def load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundl
 ###############################################################################
 ###############################################################################
 
-def get_dice_coefficients(source_sft, source_filename, target_sft, target_filename):
+def _get_dice_coefficients(source_sft, source_filename, target_sft, target_filename):
     """
     Given two tractograms determine the similary by calculating the weighted
     dice coefficient. Assumes source and target are colocated in same space.
@@ -345,7 +452,7 @@ def get_dice_coefficients(source_sft, source_filename, target_sft, target_filena
     return dice_coeff(source_map, target_map)
 
 
-def relabel_clusters(labeled_clusters, new_labels):
+def _relabel_clusters(labeled_clusters, new_labels):
     """
     Take original streamline cluster labels and return a new array with the 
     reassigned labels. Labels are initially assigned by the clustering model
@@ -384,7 +491,7 @@ def relabel_clusters(labeled_clusters, new_labels):
     return relabeled_clusters
 
 
-def match_clusters_by_maximum_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters):
+def _match_clusters_by_maximum_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters):
     """
     Once every subjects clusters are located in MNI space, pairwise compare
     the weighted dice coefficents of each cluster. 
@@ -441,7 +548,7 @@ def match_clusters_by_maximum_dice(base_dir, data_dir, model_name, tractograms, 
             for ((source_tractogram, target_tractogram), (source_filename, target_filename)) in zip(
                 list(itertools.product(tractograms[source], tractograms[target])), 
                 list(itertools.product(tractograms_filenames[source], tractograms_filenames[target]))):
-                pairwise_dice = np.append(pairwise_dice, get_dice_coefficients(source_tractogram, source_filename, target_tractogram, target_filename))
+                pairwise_dice = np.append(pairwise_dice, _get_dice_coefficients(source_tractogram, source_filename, target_tractogram, target_filename))
 
             pairwise_shape = (len(tractograms[source]), len(tractograms[target]))
             block = pairwise_dice.reshape(pairwise_shape)
@@ -483,7 +590,7 @@ def match_clusters_by_maximum_dice(base_dir, data_dir, model_name, tractograms, 
         # this can be used with the bundle tractogram to load clusters
         source_subbundle_base_dir = join(base_dir, source, data_dir, str(n_clusters))
         original_cluster_labels = np.load(join(source_subbundle_base_dir, f'{model_name}_idx.npy'))
-        new_cluster_labels = relabel_clusters(original_cluster_labels, target_labels)
+        new_cluster_labels = _relabel_clusters(original_cluster_labels, target_labels)
         index_file = join(source_subbundle_base_dir, f'{target}_maxdice_idx.npy')
         logger.log(logging.DEBUG, f'saving {index_file}')
         np.save(index_file, new_cluster_labels)
@@ -493,7 +600,7 @@ def match_clusters_by_maximum_dice(base_dir, data_dir, model_name, tractograms, 
 # Source: https://gist.github.com/lebedov/9fa8b5a02a0e764cd40c
 # Reference: https://stat.ethz.ch/pipermail/r-help/2010-April/236664.html
 ###############################################################################
-def maximize_trace(a):
+def _maximize_trace(a):
     """
     Returns the cluster labels that maximize the trace of matrix `a`
     """
@@ -535,12 +642,12 @@ def maximize_trace(a):
     else:
         return [x[1] for x in inds]
 
-def match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters):
+def _match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters):
     """
     Once every subjects clusters are located in MNI space, pairwise compare
     the wieghted dice coefficents of each cluster.
     
-    NOTE: alternative to match_clusters_by_maximum_dice labeling algorithm 
+    NOTE: alternative to _match_clusters_by_maximum_dice labeling algorithm 
     Ensures clusters remain unique. The number of clusters of resulting
     clusters for each pair will be the minimum of number of target clusters
     and number of source clusters.
@@ -585,7 +692,7 @@ def match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tracto
             for ((source_tractogram, target_tractogram), (source_filename, target_filename)) in zip(
                 list(itertools.product(tractograms[source], tractograms[target])), 
                 list(itertools.product(tractograms_filenames[source], tractograms_filenames[target]))):
-                pairwise_dice = np.append(pairwise_dice, get_dice_coefficients(source_tractogram, source_filename, target_tractogram, target_filename))
+                pairwise_dice = np.append(pairwise_dice, _get_dice_coefficients(source_tractogram, source_filename, target_tractogram, target_filename))
 
             pairwise_shape = (len(tractograms[source]), len(tractograms[target]))
             block = pairwise_dice.reshape(pairwise_shape)
@@ -601,7 +708,7 @@ def match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tracto
             # np.save(adjacency_block_file, block)
             logger.log(logging.DEBUG, f'adjacency block {source} {target} {block}')
 
-            target_labels = maximize_trace(block)
+            target_labels = _maximize_trace(block)
 
             logger.log(logging.DEBUG, f'saving {munkres_cluster_labels_file}')
             np.save(munkres_cluster_labels_file, target_labels)
@@ -614,7 +721,7 @@ def match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tracto
         # this can be used with the bundle tractogram to load clusters
         source_subbundle_base_dir = join(base_dir, source, data_dir, str(n_clusters))
         original_cluster_labels = np.load(join(source_subbundle_base_dir, f'{model_name}_idx.npy'))
-        new_cluster_labels = relabel_clusters(original_cluster_labels, target_labels)
+        new_cluster_labels = _relabel_clusters(original_cluster_labels, target_labels)
         munkres_index_file = join(source_subbundle_base_dir, f'{target}_munkres_idx.npy')
         logger.log(logging.DEBUG, f'saving {munkres_index_file}')
         np.save(munkres_index_file, new_cluster_labels)
@@ -622,12 +729,17 @@ def match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tracto
 
 ###############################################################################
 # Since relabeling using weighted DICE coefficients is underperforming, 
-# try using centriod MDF
+# try using centroid MDF
 ###############################################################################
 
-def prealignment_centroids(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
+def _prealignment_centroids(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
     """
-    calculate the centriod of each cluster for each subject
+    calculate the centroid of each cluster for each subject.
+
+    "prealignment" is meant to indicate that the clusters have not been aligned
+    across models using a consensus subject. therefore the centroids are based
+    on the "original" cluster labels determined by the subbundle model for each
+    subject.
 
     Parameters
     ----------
@@ -670,12 +782,12 @@ def prealignment_centroids(base_dir, data_dir, model_name, subjects, bundle_name
             centroid = np.mean(set_number_of_points(tractogram.streamlines, n_points), axis=0)
 
             logger.log(logging.DEBUG, f'generating centroid tractogram {subject} {bundle_name} {cluster_id}')
-            centriod_sft = StatefulTractogram.from_sft([centroid], tractogram)
-            centroids[subject].append(centriod_sft)
+            centroid_sft = StatefulTractogram.from_sft([centroid], tractogram)
+            centroids[subject].append(centroid_sft)
 
     return centroids
 
-def relabled_centriods(base_dir, data_dir, subjects, bundle_name, cluster_idxs, cluster_names):
+def _relabeled_centroids(base_dir, data_dir, subjects, bundle_name, cluster_idxs, cluster_names):
     """
     calculate the centroid of each cluster for each subject and order the clusters by the
     new cluster names
@@ -700,7 +812,7 @@ def relabled_centriods(base_dir, data_dir, subjects, bundle_name, cluster_idxs, 
     n_points = 100
     centroids = {}
     
-    bundle_tractograms = load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name)
+    bundle_tractograms = _load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name)
 
     for subject in subjects:
         centroids[subject] = []
@@ -708,12 +820,12 @@ def relabled_centriods(base_dir, data_dir, subjects, bundle_name, cluster_idxs, 
             centroid = np.mean(set_number_of_points(bundle_tractograms[subject].streamlines[cluster_idx], n_points), axis=0)
             
             logger.log(logging.DEBUG, f'generating relabeled centroid tractogram {subject} {bundle_name} {cluster_name}')
-            centriod_sft = StatefulTractogram.from_sft([centroid], bundle_tractograms[subject])
-            centroids[subject].append(centriod_sft)
+            centroid_sft = StatefulTractogram.from_sft([centroid], bundle_tractograms[subject])
+            centroids[subject].append(centroid_sft)
 
     return centroids
 
-def move_centriods_to_MNI(data_dir, subjects, centroids):
+def _move_centroids_to_MNI(data_dir, subjects, centroids):
     """
     move the centroids from subject space into MNI space
 
@@ -725,18 +837,18 @@ def move_centriods_to_MNI(data_dir, subjects, centroids):
 
     Returns
     -------
-    mni_centriods : dict
+    mni_centroids : dict
     """
-    mni_centriods = {}
+    mni_centroids = {}
     for subject in subjects:
-        mni_centriods[subject] = []
+        mni_centroids[subject] = []
         for centroid in centroids[subject]:
             logger.log(logging.DEBUG, 'moving centroid to MNI')
-            mni_centriods[subject].append(move_tractogram_to_MNI_space(data_dir, subject, centroid))
+            mni_centroids[subject].append(_move_tractogram_to_MNI_space(data_dir, subject, centroid))
     
-    return mni_centriods
+    return mni_centroids
 
-def match_clusters_by_centroid_MDF(base_dir, data_dir, model_name, centriods, target, sources, n_clusters):
+def _match_clusters_by_centroid_MDF(base_dir, data_dir, model_name, centroids, target, sources, n_clusters):
     """
     Given target's subbundle centroids assign target's labels to source's 
     subbundle centroids based on proximity, in MNI space, as calculated by MDF.
@@ -753,11 +865,11 @@ def match_clusters_by_centroid_MDF(base_dir, data_dir, model_name, centriods, ta
         pairwise_mdf = np.array([])
             
         # calculate distance between source and target centroids
-        for (source_centriod, target_centroid) in itertools.product(centriods[source], centriods[target]):
-            mdf = bundles_distances_mdf(source_centriod.streamlines, target_centroid.streamlines)
+        for (source_centroid, target_centroid) in itertools.product(centroids[source], centroids[target]):
+            mdf = bundles_distances_mdf(source_centroid.streamlines, target_centroid.streamlines)
             pairwise_mdf = np.append(pairwise_mdf, mdf)
 
-        pairwise_shape = (len(centriods[source]), len(centriods[target]))
+        pairwise_shape = (len(centroids[source]), len(centroids[target]))
         block = pairwise_mdf.reshape(pairwise_shape)
         # logger.log(logging.DEBUG, f'{target} {source} {block}')
 
@@ -766,11 +878,11 @@ def match_clusters_by_centroid_MDF(base_dir, data_dir, model_name, centriods, ta
 
         source_subbundle_base_dir = join(base_dir, source, data_dir, str(n_clusters))
         original_cluster_labels = np.load(join(source_subbundle_base_dir, f'{model_name}_idx.npy'))
-        new_cluster_labels = relabel_clusters(original_cluster_labels, target_labels)
+        new_cluster_labels = _relabel_clusters(original_cluster_labels, target_labels)
         logger.log(logging.DEBUG, f'{target} {source} {new_cluster_labels}')
-        centriod_index_file = join(source_subbundle_base_dir, f'{target}_mdf_idx.npy')
-        logger.log(logging.DEBUG, f'saving {centriod_index_file}')
-        np.save(centriod_index_file, new_cluster_labels)
+        centroid_index_file = join(source_subbundle_base_dir, f'{target}_mdf_idx.npy')
+        logger.log(logging.DEBUG, f'saving {centroid_index_file}')
+        np.save(centroid_index_file, new_cluster_labels)
 
 ###############################################################################
 
@@ -781,7 +893,9 @@ class Algorithm:
     """
     MAXDICE = 'maxdice'
     MUNKRES = 'munkres'
-    CENTROID = 'centroid'
+    CENTROID = 'mdf'
+
+algorithms = [Algorithm.MAXDICE, Algorithm.MUNKRES, Algorithm.CENTROID]
 
 def match_clusters(base_dir, data_dir, model_name, subjects, tractograms, tractograms_filenames, target, n_clusters, algorithm):
     """
@@ -789,21 +903,21 @@ def match_clusters(base_dir, data_dir, model_name, subjects, tractograms, tracto
 
     New cluster labels are saved to disk. 
     
-    See `match_clusters_by_maximum_dice`, `match_clusters_by_best_remaining_dice`,
-    and `match_clusters_by_centroid_MDF` for details.
+    See `_match_clusters_by_maximum_dice`, `_match_clusters_by_best_remaining_dice`,
+    and `_match_clusters_by_centroid_MDF` for details.
     """
     sources = subjects[:]
     sources.remove(target)
 
     if algorithm == Algorithm.MAXDICE:
         logger.log(logging.DEBUG, 'matching by maximum dice')
-        match_clusters_by_maximum_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters)
+        _match_clusters_by_maximum_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters)
     elif algorithm == Algorithm.MUNKRES:
         logger.log(logging.DEBUG, 'matching by munkres')
-        match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters)
+        _match_clusters_by_best_remaining_dice(base_dir, data_dir, model_name, tractograms, tractograms_filenames, target, sources, n_clusters)
     elif algorithm == Algorithm.CENTROID:
-        logger.log(logging.DEBUG, 'matching by centriod')
-        match_clusters_by_centroid_MDF(base_dir, data_dir, model_name, tractograms, target, sources, n_clusters)
+        logger.log(logging.DEBUG, 'matching by centroid')
+        _match_clusters_by_centroid_MDF(base_dir, data_dir, model_name, tractograms, target, sources, n_clusters)
     else:
         logger.log(logging.ERROR, 'unknown algorithm')
 
@@ -817,7 +931,11 @@ def match_clusters(base_dir, data_dir, model_name, subjects, tractograms, tracto
 ###############################################################################
 ###############################################################################
 
-def load_fa_scalar_data(base_dir, data_dir, subjects, csd=True):
+class Scalars:
+    DTI_FA = 'DTI_FA.nii.gz'
+    DTI_MD = 'DTI_MD.nii.gz'
+
+def _load_scalar_data(base_dir, data_dir, subjects, scalar=Scalars.DTI_FA, csd=True):
     """
     Loads the FA scalar data for all subjects. By default assumes CSD.
 
@@ -826,7 +944,10 @@ def load_fa_scalar_data(base_dir, data_dir, subjects, csd=True):
     NOTE: Looks for scalar file locally, if it does not exist the code will attempt
     to download from AWS the hcp_reliability single shell study.
 
-    `{base_dir}/{subject}/{data_dir}/FA.nii.gz`
+    `{base_dir}/{subject}/{data_dir}/{scalar}`
+
+    NOTE: duplicates subbundle_model_analysis_utlis._download_scalar_data
+    only distinction is data_dir is single session instead of multipl sessions
     """
     import s3fs
     from os.path import exists, join
@@ -834,13 +955,11 @@ def load_fa_scalar_data(base_dir, data_dir, subjects, csd=True):
 
     fs = s3fs.S3FileSystem()
 
-    scalar_basename = 'FA.nii.gz'
-
     scalar_data = {}
 
     for subject in subjects:
         scalar_data[subject] = {}
-        scalar_filename = join(base_dir, subject, data_dir, scalar_basename)
+        scalar_filename = join(base_dir, subject, data_dir, scalar)
         if not exists(scalar_filename):
             logger.log(logging.DEBUG, f'downloading scalar {scalar_filename}')
             if csd:
@@ -849,7 +968,7 @@ def load_fa_scalar_data(base_dir, data_dir, subjects, csd=True):
                         f'profile-hcp-west/hcp_reliability/single_shell/'
                         f'{data_dir.lower()}_afq_CSD/'
                         f'sub-{subject}/ses-01/'
-                        f'sub-{subject}_dwi_model-DTI_FA.nii.gz'
+                        f'sub-{subject}_dwi_model-{scalar}'
                     ),
                     scalar_filename
                 )
@@ -859,7 +978,7 @@ def load_fa_scalar_data(base_dir, data_dir, subjects, csd=True):
                         f'profile-hcp-west/hcp_reliability/single_shell/'
                         f'{data_dir.lower()}_afq/'
                         f'sub-{subject}/ses-01/'
-                        f'sub-{subject}_dwi_model-DTI_FA.nii.gz'
+                        f'sub-{subject}_dwi_model-{scalar}'
                     ),
                     scalar_filename
                 )
@@ -870,7 +989,7 @@ def load_fa_scalar_data(base_dir, data_dir, subjects, csd=True):
     return scalar_data
 
 
-def load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name, csd=True):
+def _load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name, csd=True):
     """
     Loads the bundle tractogram for all `subjects`. Bundle is specified with
     `bundle_name`. By default assumes CSD.
@@ -927,7 +1046,7 @@ def load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name, csd=True)
     return tractograms
 
 
-def load_labeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters):
+def _load_labeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters):
     """
     Loads the clusters from clustering model for each `subject`. The file 
     contains an ndarray with a cluster label, 0...K-1, for each streamline.
@@ -961,7 +1080,7 @@ def load_labeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters):
     return (cluster_idxs, cluster_names)
 
 
-def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters, target, algorithm='munkres'):
+def _load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters, target, algorithm='munkres'):
     """
     Load the subjects clusters using labels from target subject.
     If the subject is the target then loads the original labels.
@@ -975,8 +1094,8 @@ def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters
     `./{base_dir}/{subject}/{data_dir}/{target}_mdf_idx.npy`
     `./{base_dir}/{subject}/{data_dir}/{target}_idx.npy`
 
-    see `load_labeled_clusters`
-    TODO: duplicates much of logic; combine with load_labeled_clusters
+    see `_load_labeled_clusters`
+    TODO: duplicates much of logic; combine with _load_labeled_clusters
     """
     import numpy as np
     from os.path import join
@@ -1001,7 +1120,7 @@ def load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters
     return (cluster_idxs, cluster_names)
 
 
-def get_cluster_subject_afq_profiles(base_dir, data_dir, subjects, bundle_name, cluster_idxs, cluster_names, n_clusters):
+def _get_cluster_subject_afq_profiles(base_dir, data_dir, subjects, bundle_name, cluster_idxs, cluster_names, n_clusters):
     """
     Calculate all afq profiles for each cluster. Where the cluster labels 
     originate from the cluster model `model_name`.
@@ -1021,11 +1140,11 @@ def get_cluster_subject_afq_profiles(base_dir, data_dir, subjects, bundle_name, 
     from dipy.stats.analysis import afq_profile, gaussian_weights
     import numpy as np
 
-    fa_scalar_data = load_fa_scalar_data(base_dir, data_dir, subjects)
+    fa_scalar_data = _load_scalar_data(base_dir, data_dir, subjects)
 
     # using tractograms - which have been transformed into MNI space is not going to work...
     # therefore need to load the cluster ids
-    bundle_tractograms = load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name)
+    bundle_tractograms = _load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name)
     
     cluster_profiles = {}
 
@@ -1059,7 +1178,7 @@ def get_cluster_subject_afq_profiles(base_dir, data_dir, subjects, bundle_name, 
     return (cluster_profiles, subject_profiles)
 
 
-def get_bundle_afq_profiles(base_dir, data_dir, subjects, bundle_name):
+def _get_bundle_afq_profiles(base_dir, data_dir, subjects, bundle_name):
     """
     Calculate the weighted afq profile for each subjects bundle.
 
@@ -1069,8 +1188,8 @@ def get_bundle_afq_profiles(base_dir, data_dir, subjects, bundle_name):
     from dipy.stats.analysis import afq_profile, gaussian_weights
     import numpy as np
 
-    fa_scalar_data = load_fa_scalar_data(base_dir, data_dir, subjects)
-    bundle_tractograms = load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name)
+    fa_scalar_data = _load_scalar_data(base_dir, data_dir, subjects)
+    bundle_tractograms = _load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name)
 
     profiles = []
 
@@ -1096,7 +1215,7 @@ def get_bundle_afq_profiles(base_dir, data_dir, subjects, bundle_name):
     return profiles
 
 
-def get_profiles(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
+def _get_profiles(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
     """
     NOTE:
     1) When using graspologic, depending on number of clusters 
@@ -1112,11 +1231,11 @@ def get_profiles(base_dir, data_dir, model_name, subjects, bundle_name, n_cluste
     """
 
     # bundle_profiles consists of (N subjects, 100 nodes)
-    bundle_profiles = get_bundle_afq_profiles(base_dir, data_dir, subjects, bundle_name)
+    bundle_profiles = _get_bundle_afq_profiles(base_dir, data_dir, subjects, bundle_name)
     
     # dictionary of K clusters with N profiles, where N <= number of subjects, by 100 nodes
-    cluster_idxs, cluster_names = load_labeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters)
-    (orig_cluster_profiles, orig_subject_profiles) = get_cluster_subject_afq_profiles(
+    cluster_idxs, cluster_names = _load_labeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters)
+    (orig_cluster_profiles, orig_subject_profiles) = _get_cluster_subject_afq_profiles(
         base_dir, data_dir, subjects, bundle_name, cluster_idxs, cluster_names, n_clusters
     )
 
@@ -1126,15 +1245,15 @@ def get_profiles(base_dir, data_dir, model_name, subjects, bundle_name, n_cluste
     # WARNING: each cluster may have different number of profiles (N profiles, 100 nodes)
     # see the note in pydoc
     for target in subjects:
-        cluster_idxs, cluster_names = load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters, target)
-        (new_cluster_profiles[target], new_subject_profiles[target]) = get_cluster_subject_afq_profiles(
+        cluster_idxs, cluster_names = _load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters, target)
+        (new_cluster_profiles[target], new_subject_profiles[target]) = _get_cluster_subject_afq_profiles(
             base_dir, data_dir, subjects, bundle_name, cluster_idxs, cluster_names, n_clusters
         )
         
     return (bundle_profiles, orig_cluster_profiles, orig_subject_profiles, new_cluster_profiles, new_subject_profiles)
 
 
-def calculate_ratios(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
+def _calculate_ratios(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters):
     """
     apply otsu's critria 
     - minimize variance within subbundles (intraclass)
@@ -1156,7 +1275,7 @@ def calculate_ratios(base_dir, data_dir, model_name, subjects, bundle_name, n_cl
         bundle_profiles, 
         orig_cluster_profiles, orig_subject_profiles, 
         new_cluster_profiles, new_subject_profiles
-    ) = get_profiles(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
+    ) = _get_profiles(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
 
     ###################################
     # baseline comparison -- calculate ratio for bundle
@@ -1269,7 +1388,7 @@ def calculate_ratios(base_dir, data_dir, model_name, subjects, bundle_name, n_cl
 ###############################################################################
 
 
-def find_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters, algorithm=Algorithm.MUNKRES):
+def _find_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters, algorithm=Algorithm.MUNKRES):
     """
     TODO need to document, but more importantly need to select and return consensus subject
     """
@@ -1279,7 +1398,7 @@ def find_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name
     # run step 0
     logger.log(logging.INFO, 'loading MNI clusters')
     _tic = time.perf_counter()
-    tractograms, tractograms_filenames = load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
+    tractograms, tractograms_filenames = _load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
     _toc = time.perf_counter()
     logger.log(logging.DEBUG, f'loading MNI clusters {_toc - _tic:0.4f} seconds')
 
@@ -1294,7 +1413,7 @@ def find_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name
     # run step 2
     logger.log(logging.INFO, 'calculating ratios')
     _tic = time.perf_counter()
-    _, _, new_ratios = calculate_ratios(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
+    _, _, new_ratios = _calculate_ratios(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
     _toc = time.perf_counter()
     logger.log(logging.DEBUG, f'calculating ratios {_toc - _tic:0.4f} seconds')
 
@@ -1319,8 +1438,8 @@ def find_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name
 ###############################################################################
 ###############################################################################
 
-def load_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name, subject, n_clusters, algorithm=Algorithm.MUNKRES):
-    tractograms, tractograms_filenames = load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
+def _load_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name, subject, n_clusters, algorithm=Algorithm.MUNKRES):
+    tractograms, tractograms_filenames = _load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
     match_clusters(base_dir, data_dir, model_name, subjects, tractograms, tractograms_filenames, subject, n_clusters, algorithm)
 
 ###############################################################################
@@ -1333,66 +1452,94 @@ def load_consensus_subject(base_dir, data_dir, model_name, subjects, bundle_name
 
 # Now that have identified "consensus" subject (target)
 
-# match cluster retest
-def match_retest_clusters(base_dir, model_name, subjects, bundle_name, consensus, n_clusters, algorithm=Algorithm.MUNKRES):
-    data_dir = 'HCP_Retest'
-    tractograms, tractograms_filenames = load_MNI_cluster_tractograms(base_dir, data_dir, model_name, subjects, bundle_name, n_clusters)
-    match_clusters(base_dir, data_dir, model_name, subjects, tractograms, tractograms_filenames, consensus, n_clusters, algorithm)
+def match_retest_clusters(metadata, cluster_info, bundle_name, algorithm=Algorithm.MUNKRES):
+    """
+    now that have identified the "consensus" subject -- match cluster retest
+    """
+    from os.path import join
+
+    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+    data_dir = metadata['experiment_retest_session']
+
+    # TODO: this may not be correct! double-check should be able to match clusters by correct centroid algorithm
+    # NOTE: cluster_info[n_clusters]['centroids'] is prealigned streamline count
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        match_clusters(
+            base_dir,
+            data_dir,
+            metadata['model_name'],
+            metadata['experiment_subjects'],
+            cluster_info[n_clusters]['centroids'] if algorithm == Algorithm.CENTROID else cluster_info[n_clusters]['tractograms'],
+            {} if algorithm == Algorithm.CENTROID else cluster_info[n_clusters]['tractograms_filenames'],
+            cluster_info[n_clusters]['consensus_subject'],
+            n_clusters,
+            algorithm
+        )
 
 # visualize the clusters profiles across test-retest
-def get_cluster_afq_profiles(base_dir, data_dirs, model_name, subjects, bundle_name, n_clusters, target):
+
+def get_cluster_afq_profiles(metadata, bundle_name, n_clusters, target):
     """
-    see visualizations.get_cluster_afq_profiles
+    Returns
+    -------
+    cluster_afq_profiles : dict
+    └── for each scalar in model return the scalar profile for the subject-session cluster
     """
     from os.path import join
     from dipy.stats.analysis import afq_profile, gaussian_weights
 
+    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+    
     cluster_afq_profiles = {}
 
-    for subject in subjects:
-        cluster_afq_profiles[subject] = {}
-        for data_dir in data_dirs:
-            cluster_afq_profiles[subject][data_dir] = {}
-            fa_scalar_data = load_fa_scalar_data(base_dir, data_dir, subjects)
-            bundle_tractograms = load_bundle_tractograms(base_dir, data_dir, subjects, bundle_name)
-            cluster_idxs, cluster_names = load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters, target)
-            ii = 0
-            for cluster_name, cluster_idx in zip(cluster_names[subject], cluster_idxs[subject]):
-                cluster_afq_profiles[subject][data_dir][ii] = afq_profile(
-                    fa_scalar_data[subject],
-                    bundle_tractograms[subject].streamlines[cluster_idx],
-                    bundle_tractograms[subject].affine,
-                    weights=gaussian_weights(bundle_tractograms[subject].streamlines[cluster_idx])
-                )
-                ii += 1
+    for scalar in metadata['model_scalars']:
+        cluster_afq_profiles[scalar] = {}
+
+        for subject in metadata['experiment_subjects']:
+            cluster_afq_profiles[scalar][subject] = {}
+            for data_dir in metadata['experiment_sessions']:
+                cluster_afq_profiles[scalar][subject][data_dir] = {}
+                scalar_data = _load_scalar_data(base_dir, data_dir, metadata['experiment_subjects'], scalar)
+                bundle_tractograms = _load_bundle_tractograms(base_dir, data_dir, metadata['experiment_subjects'], bundle_name)
+                cluster_idxs, cluster_names = _load_relabeled_clusters(base_dir, data_dir, metadata['model_name'], metadata['experiment_subjects'], n_clusters, target)
+                ii = 0
+                for cluster_name, cluster_idx in zip(cluster_names[subject], cluster_idxs[subject]):
+                    cluster_afq_profiles[scalar][subject][data_dir][ii] = afq_profile(
+                        scalar_data[subject],
+                        bundle_tractograms[subject].streamlines[cluster_idx],
+                        bundle_tractograms[subject].affine,
+                        weights=gaussian_weights(bundle_tractograms[subject].streamlines[cluster_idx])
+                    )
+                    ii += 1
 
     return cluster_afq_profiles
 
 
-def cluster_reliability(base_dir, data_dirs, model_name, subjects, bundle_name, n_clusters, target):
-    """
-    plot the test and retest afq cluster profiles with confidence intervals
-    """
-    import visualizations as viz
-
-    cluster_afq_profiles = get_cluster_afq_profiles(base_dir, data_dirs, model_name, subjects, bundle_name, n_clusters, target)
-    model_names, _, _, cluster_names, _ = viz.load_clusters(base_dir, bundle_name)
-
-    # rewrite model_names and cluster names
-    for subject in subjects:
-        for data_dir in data_dirs:
-            model_names[subject][data_dir] = ['mase_fa_r2_is_mdf']
-
-    for subject in subjects:
-        for data_dir in data_dirs:
-            _, _cluster_names = load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters, target)
-            cluster_names[subject][data_dir] = [_cluster_names[subject]]
-
-    viz.plot_cluster_reliability(base_dir, bundle_name, 'fa', cluster_afq_profiles, model_names, cluster_names)
-
 """
 WIP
 """
+
+# def cluster_reliability(base_dir, data_dirs, model_name, subjects, bundle_name, n_clusters, target):
+#     """
+#     plot the test and retest afq cluster profiles with confidence intervals
+#     """
+#     import visualizations as viz
+
+#     cluster_afq_profiles = get_cluster_afq_profiles(base_dir, data_dirs, model_name, subjects, bundle_name, n_clusters, target)
+#     model_names, _, _, cluster_names, _ = viz.load_clusters(base_dir, bundle_name)
+
+#     # rewrite model_names and cluster names
+#     for subject in subjects:
+#         for data_dir in data_dirs:
+#             model_names[subject][data_dir] = ['mase_fa_r2_is_mdf']
+
+#     for subject in subjects:
+#         for data_dir in data_dirs:
+#             _, _cluster_names = _load_relabeled_clusters(base_dir, data_dir, model_name, subjects, n_clusters, target)
+#             cluster_names[subject][data_dir] = [_cluster_names[subject]]
+
+#     viz.plot_cluster_reliability(base_dir, bundle_name, 'fa', cluster_afq_profiles, model_names, cluster_names)
+
 # def population_reliability(base_dir, data_dirs, model_name, subjects, bundle_name, target):
 #     """
 #     Plot the bar chart
@@ -1414,7 +1561,7 @@ WIP
 
 #     for subject in subjects:
 #         for data_dir in data_dirs:
-#             _cluster_idxs, _cluster_names = load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target)
+#             _cluster_idxs, _cluster_names = _load_relabeled_clusters(base_dir, data_dir, model_name, subjects, target)
 #             cluster_idxs[subject][data_dir] = [_cluster_idxs[subject]]
 #             cluster_names[subject][data_dir] = [_cluster_names[subject]]
 

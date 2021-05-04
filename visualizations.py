@@ -543,29 +543,35 @@ def plot_cluster_reliability(base_dir, session_names, subjects, bundle_name, sca
     from dipy.stats.analysis import afq_profile, gaussian_weights
     import matplotlib.pyplot as plt
     import seaborn as sns
+    import math
     
     df = pd.DataFrame(columns=["session", "model_name", "cluster_name", "subject", "profile"])
 
-    max_value = 0
+    max_value = {}
 
     for subject in subjects:
         for session in session_names:
+            max_value[session] = 0
+
             ii = 0
             for model_name, model_cluster_names in zip(model_names[subject][session][n_clusters], cluster_names[subject][session][n_clusters]):
                 for cluster_name in model_cluster_names:
-                    profile = cluster_afq_profiles[subject][session][ii]
-                    
-                    profile_max_value = profile.max()
-                    if (profile_max_value > max_value):
-                        max_value = profile_max_value
-                    
-                    df = df.append({
-                        'session': session,
-                        'model_name': model_name,
-                        'cluster_name': cluster_name,
-                        'subject': subject,
-                        'profile': profile
-                    }, ignore_index=True)
+                    # if using graspologic clustering not all models generate the requested number of clusters
+                    if ii in cluster_afq_profiles[subject][session].keys():
+                        profile = cluster_afq_profiles[subject][session][ii]
+                        
+                        # find max value to set ylim
+                        profile_max_value = profile.max()
+                        if (profile_max_value > max_value[session]):
+                            max_value[session] = profile_max_value
+                        
+                        df = df.append({
+                            'session': session,
+                            'model_name': model_name,
+                            'cluster_name': cluster_name,
+                            'subject': subject,
+                            'profile': profile
+                        }, ignore_index=True)
 
                     ii += 1
     
@@ -591,11 +597,13 @@ def plot_cluster_reliability(base_dir, session_names, subjects, bundle_name, sca
                     plt.savefig(join(base_dir, f'{session}_{model_name}_cluster_{cluster_name}_{scalar_abr}_profiles.png'))
                     plt.close()
 
+    # should correlate cluster colors across various plots (anatomical, centroid, ...)
     # 95% ci plot
     # cluster 0, slf 2, blue
     # cluster 1, slf 3, purple
     # cluster 2, slf 1, cyan
-    colors = ['tab:blue', 'tab:purple', 'tab:cyan']
+    # colors = ['tab:blue', 'tab:purple', 'tab:cyan']
+    colors = sns.color_palette()
     
     for session in session_names:
         session_model_names = df.model_name.unique()
@@ -609,11 +617,11 @@ def plot_cluster_reliability(base_dir, session_names, subjects, bundle_name, sca
                 df2 = pd.melt(frame=df1, var_name='node', value_name=f'{scalar_abr}')
                 sns.lineplot(data=df2, x='node', y=f'{scalar_abr}', color=colors[cluster_name])
 
-            # plt.ylim(0, max_value*1.01)
-            plt.ylim(0.2, 0.6)
+            # plt.ylim(0., 1.)
+            plt.ylim(0., 10**int(math.log10(abs(max(max_value.values())))))
             plt.rc('axes', labelsize=14)
             # plt.title(f'{bundle_name} {session} {model_name} cluster {scalar_abr} profiles')
-            plt.savefig(join(base_dir, f'{session}_{model_name}_cluster_{scalar_abr}_profile_ci.png'))
+            plt.savefig(join(base_dir, f'{session}_{model_name}_{n_clusters}_clusters_{scalar_abr}_profile_ci.png'))
             plt.close()
 
 
@@ -840,3 +848,233 @@ def anatomy_visualizations(base_dir, bundle_name, subject, model_names, cluster_
             plt.close()
 
     return 1
+
+
+def save_centroids(centroids, centroids_name):
+    """
+    save individual tractogram files for each subject cluster centroid
+    
+    Parameters
+    ----------
+    centroids : dict
+    
+    centroids_name : string
+    """
+    from dipy.io.streamline import save_tractogram
+
+    for subject in centroids.keys():
+        cluster_id = 0
+        for cluster_centroid in centroids[subject]:
+            save_tractogram(cluster_centroid, f'{subject}_{cluster_id}_centroid_{centroids_name}.trk')
+            cluster_id += 1
+            
+def convert_centroids(n_clusters, mni_centroids, bundle_dict):
+    """
+    create tractogram for each mni cluster containing all subjects
+    
+    Parameters
+    ----------
+    n_clusters : int
+    mni_centroids : dict
+    bundle_dict : dict
+    """
+    
+    from dipy.io.stateful_tractogram import StatefulTractogram
+    from AFQ.utils.streamlines import bundles_to_tgram
+    from AFQ.data import read_mni_template
+
+    clusters = [[] for _ in range(n_clusters)]
+
+    for subject in mni_centroids.keys():
+        cluster_id = 0
+        for cluster_centroid in mni_centroids[subject]:
+            clusters[cluster_id].append(cluster_centroid.streamlines[0])
+            cluster_id += 1
+
+    # any subject/tractogram will do, so just grab first one
+    subject = next(iter(mni_centroids))
+    tractogram = mni_centroids[subject][0]
+    
+    bundles = {}
+    
+    cluster_id = 0
+    for bundle_name in bundle_dict.keys():
+        bundles[bundle_name] = StatefulTractogram.from_sft(clusters[cluster_id], tractogram)
+        cluster_id += 1
+
+        # note if bundle dict contains more cluster definitions then n_clusters we cans stop
+        if cluster_id == n_clusters:
+            break
+        
+    sft = bundles_to_tgram(bundles, bundle_dict, read_mni_template())
+    
+    return sft
+
+def visualize_centroids(sft, bundle_dict):
+    """
+    plotly visualzation for clusters using MNI space
+    
+    Parameters
+    ----------
+    sft : StatefulTractogram
+    bundle_dict : dict
+    """
+    from AFQ.viz.plotly_backend import visualize_volume, visualize_bundles
+    from AFQ.data import read_mni_template
+
+    figure = visualize_volume(
+        read_mni_template().get_fdata(),
+        interact = False,
+        inline = False
+    )
+
+    return visualize_bundles(sft, bundle_dict=bundle_dict, figure=figure)
+
+def visualize_subject_clusters(subject, centroids, bundle_dict):
+    """
+    take the subject and show the centroid for each cluster
+    
+    Parameters
+    ----------
+    subject : string
+    centroids : dict
+    bundle_dict : dict
+    """
+    from dipy.io.stateful_tractogram import StatefulTractogram
+
+    clusters = []
+    for cluster_centroid in centroids[subject]:
+        clusters.append(cluster_centroid.streamlines[0])
+    
+    sft = StatefulTractogram.from_sft(clusters, cluster_centroid)
+    return visualize_centroids(sft, bundle_dict)
+
+def display_consensus_centroids(metadata, cluster_info):
+    """
+    for each `n_clusters` in expirement (i.e., RANGE_N_CLUSTERS)
+    show the centroids for the consensus subject
+    NOTE: that the consensus subject may differ across clusters
+    """
+    from IPython.display import display
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        consensus_subject = cluster_info[n_clusters]['consensus_subject']
+        print('n_clusters', n_clusters, 'consensus subject', consensus_subject)
+
+        display(visualize_subject_clusters(
+            consensus_subject,
+            cluster_info[n_clusters]['centroids'],
+            metadata['experiment_bundle_dict']
+        ))
+
+def display_subject_centriods(metadata, cluster_info, subject_id):
+    """
+    for each `n_clusters` in expirement (i.e., RANGE_N_CLUSTERS)
+    show the centroids for the requested subject
+    """
+    from IPython.display import display
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        print('n_clusters', n_clusters, 'subject', subject_id)
+
+        display(visualize_subject_clusters(
+            subject_id,
+            cluster_info[n_clusters]['centroids'],
+            metadata['experiment_bundle_dict']
+        ))
+
+def display_streamline_count_centroids(metadata, cluster_info):
+    from IPython.display import display
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        mni_prealign_sft = convert_centroids(n_clusters, cluster_info[n_clusters]['centroids'], metadata['experiment_bundle_dict'])
+        display(visualize_centroids(mni_prealign_sft, metadata['experiment_bundle_dict']))
+
+def _visualize_centroids_by(metadata, bundle_name, n_clusters, consensus, algorithm):
+    """
+    show effect of different match algorithms on clusters
+    
+    Parameters
+    ----------
+    n_clusters : int
+    consensus : string
+    algorithm : string
+    """
+    from identify_subbundles import get_relabeled_centroids
+    
+    _mni_centroids = get_relabeled_centroids(metadata, bundle_name, n_clusters, consensus, algorithm)
+    
+    _mni_sft = convert_centroids(n_clusters, _mni_centroids, metadata['experiment_bundle_dict'])
+    return visualize_centroids(_mni_sft, metadata['experiment_bundle_dict'])
+
+def display_maxdice_centroids(metadata, cluster_info, bundle_name):
+    from os.path import join
+    from IPython.display import display
+    from identify_subbundles import match_clusters, Algorithm
+
+    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        match_clusters(
+            base_dir,
+            metadata['experiment_test_session'],
+            metadata['model_name'],
+            metadata['experiment_subjects'],
+            cluster_info[n_clusters]['tractograms'],
+            cluster_info[n_clusters]['tractograms_filenames'],
+            cluster_info[n_clusters]['consensus_subject'],
+            n_clusters,
+            Algorithm.MAXDICE
+        )
+
+        display(_visualize_centroids_by(
+            metadata, bundle_name, n_clusters, cluster_info[n_clusters]['consensus_subject'], Algorithm.MAXDICE)
+        )
+
+def display_munkres_centroids(metadata, cluster_info, bundle_name):
+    from os.path import join
+    from IPython.display import display
+    from identify_subbundles import match_clusters, Algorithm
+
+    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        match_clusters(
+            base_dir,
+            metadata['experiment_test_session'],
+            metadata['model_name'],
+            metadata['experiment_subjects'],
+            cluster_info[n_clusters]['tractograms'],
+            cluster_info[n_clusters]['tractograms_filenames'],
+            cluster_info[n_clusters]['consensus_subject'],
+            n_clusters,
+            Algorithm.MUNKRES
+        )
+
+        display(_visualize_centroids_by(
+            metadata, bundle_name, n_clusters, cluster_info[n_clusters]['consensus_subject'], Algorithm.MUNKRES)
+        )
+
+def display_mdf_centroids(metadata, cluster_info, bundle_name):
+    from os.path import join
+    from IPython.display import display
+    from identify_subbundles import match_clusters, Algorithm
+
+    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        match_clusters(
+            base_dir,
+            metadata['experiment_test_session'],
+            metadata['model_name'],
+            metadata['experiment_subjects'],
+            cluster_info[n_clusters]['centroids'],
+            {},
+            cluster_info[n_clusters]['consensus_subject'],
+            n_clusters,
+            Algorithm.CENTROID
+        )
+
+        display(_visualize_centroids_by(
+            metadata, bundle_name, n_clusters,  cluster_info[n_clusters]['consensus_subject'], Algorithm.CENTROID)
+        )
