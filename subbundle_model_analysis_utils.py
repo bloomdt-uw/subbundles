@@ -2,197 +2,12 @@
 utility functions to support subbundle model analysis
 """
 import logging
+
+from numpy.core.fromnumeric import product
 logger = logging.getLogger('subbundle')
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
-
-def fetch_model_data(metadata):
-    """
-    set up local directory and download necessary files for model analysis
-
-    - for each bundle:
-        - scalars
-            `{expirement_name}/{bundle_name}/{subject}/{session}/{scalar}`
-        - tractogram
-            `{expirement_name}/{bundle_name}/{subject}/{session}/{bundle_name}.trk`
-        - for each cluster:
-            - cluster labels
-                `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_idx.npy`
-            - cluster tractogram
-                `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_cluster_{cluster_label}.trk`
-
-    generates:
-    - clean cluster tractogram
-    - cluster tractogram density map
-    - clean cluster tractogram density map
-
-    TODO: verify that need to generate density maps -- since going to compare clusters in MNI space
-
-    TODO: download the adjacency matricies, streamline profiles, and model_info.pkl
-
-    TODO: pair-plots and silhouette scores
-
-    Parameters
-    ----------
-    metadata : dict
-
-    Returns
-    -------
-    model_data : dict
-        dictionary with `bundle_name` as key containing
-        └── dictionary with following keys:
-                'fa_scalar_data', 'md_scalar_data', 'tractograms'
-                'model_names', 'cluster_idxs', 'cluster_names', 
-                'cluster_tractograms', 'cluster_tractograms_clean',
-                'cluster_denisty_maps', 'cluster_denisty_maps_clean'
-    """
-    from os import makedirs
-    from os.path import join
-
-    model_data = {}
-
-    for bundle_name in metadata['experiment_bundles']:
-        model_data[bundle_name] = {}
-
-        base_dir = join(metadata['experiment_output_dir'], bundle_name)
-
-        # ensure local directories exist
-        for subject in metadata['experiment_subjects']:
-            for session in metadata['experiment_sessions']:
-                for cluster_number in metadata['experiment_range_n_clusters']:
-                    makedirs(join(base_dir, subject, session, str(cluster_number)), exist_ok=True)
-        
-        logger.log(logging.INFO, f'Download {bundle_name} data from HCP reliability study')
-        
-        # NOTE since organized by bundle then by subject this downloads the subjects
-        # data multiple times, really only need it once per subject/session and not
-        # for each bundle. this is inefficent computationally, bandwidth, and storage,
-        # may want to reconsider how best to orgainizes.
-
-        for scalar in metadata['model_scalars']:
-            scalar_abr = scalar.split('.')[0]
-            model_data[bundle_name][f'{scalar_abr.lower()}_scalar_data'] = _download_scalar_data(
-                scalar, base_dir, metadata['experiment_subjects'], metadata['experiment_sessions']
-            )
-
-        model_data[bundle_name]['tractograms'] = _download_bundle_tractograms(
-            base_dir, metadata['experiment_subjects'], metadata['experiment_sessions'], bundle_name
-        )
-
-        logger.log(logging.INFO, f"Download {bundle_name} clustering models for K={metadata['experiment_range_n_clusters']}")
-        (model_names, _, cluster_idxs, cluster_names, _, 
-        cluster_tractograms, cluster_tractograms_clean, 
-        cluster_denisty_maps, cluster_denisty_maps_clean) = _download_clusters(
-            metadata['experiment_name'], 
-            base_dir, 
-            metadata['experiment_subjects'], 
-            metadata['experiment_sessions'], 
-            bundle_name, 
-            metadata['experiment_range_n_clusters']
-        )
-        
-        model_data[bundle_name]['model_names'] = model_names
-        model_data[bundle_name]['cluster_idxs'] = cluster_idxs
-        model_data[bundle_name]['cluster_names'] = cluster_names
-        model_data[bundle_name]['cluster_tractograms'] = cluster_tractograms
-        model_data[bundle_name]['cluster_tractograms_clean'] = cluster_tractograms_clean
-        model_data[bundle_name]['cluster_denisty_maps'] = cluster_denisty_maps
-        model_data[bundle_name]['cluster_denisty_maps_clean'] = cluster_denisty_maps_clean
-
-    return model_data
-
-
-def clean_tractogram(tractogram, tractogram_filename):
-    """
-    Take a tractogram and run cleaning to remove extraneous streamlines.
-    
-    Saves the cleaned version to disk.
-
-    Parameters
-    ----------
-    tractogram : StatefulTractogram
-    tractogram_filename : string
-
-    Returns
-    -------
-    sft : StatefulTractogram
-    clean_filename : string
-    """
-    from AFQ.segmentation import clean_bundle
-    from dipy.io.stateful_tractogram import StatefulTractogram
-    from os.path import exists, splitext
-    from dipy.io.streamline import load_tractogram, save_tractogram
-    import logging
-
-    # already using from_sft, suppress warnings from dipy
-    logging.getLogger("StatefulTractogram").setLevel(logging.ERROR)
-
-    base, ext = splitext(tractogram_filename)
-    clean_filename = base + '_clean' + ext
-
-    if not exists(clean_filename):
-        logger.log(logging.DEBUG, f'generating {clean_filename}')
-
-        clean_tractogram = clean_bundle(tractogram)
-        sft = StatefulTractogram.from_sft(clean_tractogram.streamlines, tractogram)
-        
-        logger.log(logging.DEBUG, f'saving {clean_filename}')
-        save_tractogram(sft, clean_filename, False)
-    else:
-        logger.log(logging.DEBUG, f'loading {clean_filename}')
-        sft = load_tractogram(clean_filename, 'same')
-
-    return sft, clean_filename
-
-def get_density_map(tractogram, tractogram_filename):
-    """
-    Take a tractogram and return a binary image of the streamlines,
-    these images is used to calculate the dice coefficents to compare
-    cluster similiartiy.
-
-    Saves the density map
-
-    Parameters
-    ----------
-    tractogram : StatefulTractogram
-    tractogram_filename : string
-
-    Returns
-    -------
-    density_map_img : Nifti1Image
-    density_map_filename : string
-    """
-    import numpy as np
-    from dipy.io.utils import create_nifti_header, get_reference_info
-    from dipy.io.stateful_tractogram import Space
-    import dipy.tracking.utils as dtu
-    from os.path import exists, splitext
-    import nibabel as nib
-
-    base, _ = splitext(tractogram_filename)
-    density_map_filename = base + '_density_map.nii.gz'
-
-    if not exists(density_map_filename):
-        logger.log(logging.DEBUG, f'generating {density_map_filename}')
-
-        if (tractogram._space != Space.VOX):
-            tractogram.to_vox()
-
-        affine, vol_dims, voxel_sizes, voxel_order = get_reference_info(tractogram)
-        tractogram_density = dtu.density_map(tractogram.streamlines, np.eye(4), vol_dims)
-        # force to unsigned 8-bit; done to reduce the size of the density map image
-        tractogram_density = np.uint8(tractogram_density)
-        nifti_header = create_nifti_header(affine, vol_dims, voxel_sizes)
-        density_map_img = nib.Nifti1Image(tractogram_density, affine, nifti_header)
-
-        logger.log(logging.DEBUG, f'saving {density_map_filename}')
-        nib.save(density_map_img, density_map_filename)
-    else:
-        logger.log(logging.DEBUG, f'loading {density_map_filename}')
-        density_map_img = nib.load(density_map_filename)
-
-    return density_map_img, density_map_filename
 
 def _download_scalar_data(scalar, base_dir, subjects, session_names, use_csd=True):
     """
@@ -203,14 +18,16 @@ def _download_scalar_data(scalar, base_dir, subjects, session_names, use_csd=Tru
     
     By default will download the CSD scalar data.
 
+    NOTE: should download from hcp-subbundle bucket to ensure using same files
+
     Parameters
     ----------
-    scalar_name : string
+    scalar_name : str
         either 'DTI_FA.nii.gz' or 'DTI_MD.nii.gz'
-    base_dir : string
-    subjects : array
-    session_names : array
-    use_csd : boolean
+    base_dir : str
+    subjects : list
+    session_names : list
+    use_csd : bool
         default True
 
     Returns
@@ -218,7 +35,7 @@ def _download_scalar_data(scalar, base_dir, subjects, session_names, use_csd=Tru
     scalar_data : dict
         dictionary with `subject` as key containing
         └── dictionary with `session_name` as key
-        containing the scalar image fdata for that subject and session.
+            └── containing the scalar image fdata for that subject and session.
     """
     import s3fs
     from os.path import exists, join
@@ -255,7 +72,61 @@ def _download_scalar_data(scalar, base_dir, subjects, session_names, use_csd=Tru
     return scalar_data
 
 
-def _download_bundle_tractograms(base_dir, subjects, session_names, bundle_name, use_csd=True, use_clean=True, generate_metadata=False):
+def _download_adjacencies(expirement_name, base_dir, subjects, session_names, bundle_name, range_n_clusters):
+    """
+    Download all adjacency files used in constructing the model. Only used for visualization purposes.
+
+        `{expirement_name}/{bundle_name}/{subject}/{session}/{n_clusters}/adjacency_*.npy`
+
+    Parameters
+    ----------
+    expirement_name : str
+    base_dir : str
+    subjects : list
+    session_names : list
+    bundle_name : str
+    range_n_clusters: list
+
+    Returns
+    -------
+    adjacencies : dict
+        dictionary with `subject` as key containing
+        └── dictionary with `session_name` as key
+            └── containing list of ndarray for each pairwise adjacency measure
+                as indicated in file name
+    """
+
+    import s3fs
+    from os.path import basename, exists, join
+    import numpy as np
+
+    fs = s3fs.S3FileSystem()
+
+    adjacencies = {}
+
+    for subject in subjects:
+        adjacencies[subject] = {}
+
+        for session in session_names:
+            adjacencies[subject][session] = []
+
+            # NOTE: these are the same across clusters so only need to download one
+            n_clusters = range_n_clusters[0]
+            remote_adjacencies = fs.glob(f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{n_clusters}/adjacency_*.npy')
+
+            for remote_adjacency in remote_adjacencies:
+                local_adjacency = join(base_dir, subject, session, basename(remote_adjacency))
+                
+                if not exists(local_adjacency):
+                    logger.log(logging.DEBUG, f'downloading {local_adjacency}')
+                    fs.get(remote_adjacency, local_adjacency)
+                
+                adjacencies[subject][session].append(np.load(local_adjacency))
+
+    return adjacencies
+
+
+def _download_bundle_tractograms(base_dir, subjects, session_names, bundle_name, use_csd=True, use_clean=True):
     """
     Download the bundle tractogram for all subjects and sessions from the 
     single shell HCP reliabilty study.
@@ -264,27 +135,24 @@ def _download_bundle_tractograms(base_dir, subjects, session_names, bundle_name,
     
     By default will download clean CSD tractograms.
 
-    Optionally genereates `streamline_counts.csv` and `streamline_counts.png` in 
-    `base_dir`.
+    NOTE: should download from hcp-subbundle bucket to ensure using same files
 
     Parameters
     ----------
-    base_dir : string
-    subjects : array
-    session_names : array
-    use_csd : boolean
+    base_dir : str
+    subjects : list
+    session_names : list
+    use_csd : bool
         default True
-    clean : boolean
+    clean : bool
         default True
-    generate_metadata : boolean
-        default False
 
     Returns
     -------
-    scalar_data : dict
+    tractograms : dict
         dictionary with `subject` as key containing
         └── dictionary with `session_name` as key
-        containing the bundle `StatefulTractogram` for that subject and session.
+            └── containing the bundle `StatefulTractogram` for that subject and session.
     """
     import s3fs
     from os.path import exists, join
@@ -306,13 +174,8 @@ def _download_bundle_tractograms(base_dir, subjects, session_names, bundle_name,
 
     tractograms = {}
     
-    if generate_metadata:
-        streamline_counts = {}
-
     for subject in subjects:
         tractograms[subject] = {}
-        if generate_metadata:
-            streamline_counts[subject] = {}
 
         for session in session_names:
             tractogram_filename = join(base_dir, subject, session, tractogram_basename)
@@ -333,32 +196,103 @@ def _download_bundle_tractograms(base_dir, subjects, session_names, bundle_name,
             tractogram = load_tractogram(tractogram_filename, 'same')
             tractograms[subject][session] = tractogram
 
-            if generate_metadata:
-                streamline_counts[subject][session] = len(tractogram.streamlines)
-
-
-    if generate_metadata:
-        import pandas as pd
-        import matplotlib.pyplot as plt
-
-        pd.DataFrame(streamline_counts).to_csv(join(base_dir, 'streamline_counts.csv'))
-        pd.DataFrame(streamline_counts).T[1:].plot(kind='bar')
-        plt.savefig(join(base_dir, 'streamline_counts.png'))
-        plt.close()
-
     return tractograms
 
-
-def _download_clusters(expirement_name, base_dir, subjects, session_names, bundle_name, cluster_numbers, generate_metadata=False):
+class ArtifactType:
     """
-    Download all cluster assignment files for the given expirement. This is for each bundle for each subject, 
-    session, and desired number of clusters.
+    enum representing supported cluster artifacts
+    """
+    EMBEDDINGS = 'embeddings'
+    EMBEDDINGS_FILTERED = 'embeddings_filtered'
+    CLUSTER_LABELS = 'cluster_labels'
+    CLUSTER_LABELS_FILTERED = 'cluster_labels_filtered'
 
-        `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_idx.npy`
-        `{expirement_name}/{bundle_name}/{subject}/{session}/{cluster_number}/{model_name}_cluster_{cluster_label}.trk`
+def _download_cluster_artifacts(expirement_name, base_dir, subjects, session_names, bundle_name, range_n_clusters, artifact_type):
+    """
+    Download cluster artifacts used in constructing the cluster tractograms.
+    
+    Only used for quality control purposes in pair plot and silhouette score visualizations.
 
-    optionally generates three csv files: `model_names.csv`, `cluster_names.csv`, and `cluster_counts.csv`
-    in `base_dir`
+    Embeddings are joint adjacency spectral embeddings, constructed from the adjacencies, and
+    used in model as features.
+
+    Cluster labels are the result of clustering. They specify which streamlines belong to which
+    cluster.
+
+    The filtered postfix are the main artifiacts of interest and signify that the artifacts 
+    are after removing streamlines that are below the average silhouette score. 
+    
+    The no postfixed versions are the originals, and can be useful for quality control.
+
+        `{expirement_name}/{session}/{bundle_name}/{subject}/{n_clusters}/*_{artifact_type}.npy`
+
+    Parameters
+    ----------
+    expirement_name : str
+    base_dir : str
+    subjects : list
+    session_names : list
+    bundle_name : str
+    range_n_clusters: list
+    artifact_type : str
+
+    Returns
+    -------
+    artifacts : dict
+        dictionary with `subject` as key containing
+        └── dictionary with `session_name` as key
+            └── dictionary with `n_clusters` as key
+                └── containing ndarray of the cluster artifact
+    """
+    import s3fs
+    from os.path import basename, exists, join
+    import numpy as np
+
+    fs = s3fs.S3FileSystem()
+
+    artifacts = {}
+
+    for subject in subjects:
+        artifacts[subject] = {}
+
+        for session in session_names:
+            artifacts[subject][session] = {}
+
+            for n_clusters in range_n_clusters:
+                artifacts[subject][session][n_clusters] = {}
+
+                remote_artifact = fs.glob(f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{n_clusters}/*_{artifact_type}.npy')[0]
+
+                local_artifact = join(base_dir, subject, session, str(n_clusters), basename(remote_artifact))
+                
+                if not exists(local_artifact):
+                    logger.log(logging.DEBUG, f'downloading {local_artifact}')
+                    fs.get(remote_artifact, local_artifact)
+                
+                artifacts[subject][session][n_clusters] = np.load(local_artifact)
+
+
+    return artifacts
+
+class ClusterType:
+    """
+    enum representing supported cluster tractogram types
+
+    MODEL is the original cluster
+    FILTERED is removing streamlines from MODEL with below average silhouette scores
+    CLEAN is cleaning FILTERED using pyAFQ and is the final resulting cluster tractogram
+    """
+    MODEL = 'model'
+    FILTERED = 'filtered'
+    CLEAN = 'clean'
+
+def _download_cluster_tractograms(expirement_name, base_dir, subjects, session_names, bundle_name, range_n_clusters, cluster_type):
+    """
+    Download all cluster tractograms for the given expirement. 
+    
+    This is for each bundle for each subject, session, and desired number of clusters.
+
+        `{expirement_name}/{bundle_name}/{subject}/{session}/{n_clusters}/{model_name}_cluster_{cluster_label}_{cluster_type}.trk`
 
     Parameters
     ----------
@@ -367,148 +301,40 @@ def _download_clusters(expirement_name, base_dir, subjects, session_names, bundl
     subjects : list
     session_names : list
     bundle_names : list
-    cluster_numbers : list
-    generate_metadata : boolean
-        default False
+    range_n_clusters : list
+    cluster_type : str
 
     Returns
     -------
-    Muliple mutlilevel dictionaries. 
-    
-    Each dictionary has `subject` as key containing
+    dictionary has `subject` as key containing
     └── dictionary with `session_name` as key containing
-        └── dictionary with `cluster_number` as key
-
-    model_names : dict
-        containing the name of the model. by convention includes abbreviation for clustering algorithm and adjacencies.
-
-        for example:
-            ['mase_kmeans_fa_r2_md_r2_is_mdf']
-
-        useful if there are mutliple models, to be able to align values in other dictionaries
-
-    cluster_labels : dict
-        an array of clusters assigned by the model to each streamline as index. this is the only artifact from clustering. 
-        all other dictionaries are derived from this information.
-
-        for example: 
-            [0, 0, 1, 3, 3, 2, 1 .... ]
-    
-    cluster_idxs : dict
-        an array for each cluster, listing the corresponding streamline indexes
-
-        for example: 
-            [[0, 1, ...], [2, 6, ...], [5, ...], [3, 4, ...], ...]
-
-    cluster_names : dict
-        an array with the cluster name. necessary as some models only maximally partition data into K=`cluster_number`.
-
-        for example: 
-            if `K=3` the model may only return 2 clusters with names [0, 1].
-
-    cluster_counts : dict
-        an array with the number of streamlines assigned to each cluster.
-
-    cluster_tractograms : dict
-    cluster_tractograms_clean : dict
-    cluster_density_maps : dict
-    cluster_density_maps_clean : dict
+        └── dictionary with `n_clusters` as key
+            └── list of cluster tractograms
     """
     import s3fs
-    from os.path import exists, join, basename, splitext
-    import numpy as np
+    from os.path import exists, join, basename
     from dipy.io.streamline import load_tractogram
-    import nibabel as nib
 
     fs = s3fs.S3FileSystem()
 
-    model_names = {}
-    cluster_labels = {}
-    cluster_idxs = {}
-    cluster_names = {}
-    cluster_counts = {}
     cluster_tractograms = {}
-    cluster_tractograms_clean = {}
-    cluster_density_maps = {}
-    cluster_density_maps_clean = {}
 
     for subject in subjects:
-        model_names[subject] = {}
-        cluster_labels[subject] = {}
-        cluster_idxs[subject] = {}
-        cluster_names[subject] = {}
-        cluster_counts[subject] = {}
         cluster_tractograms[subject] = {}
-        cluster_tractograms_clean[subject] = {}
-        cluster_density_maps[subject] = {}
-        cluster_density_maps_clean[subject] = {}
 
         for session in session_names:
-            model_names[subject][session] = {}
-            cluster_labels[subject][session] = {}
-            cluster_idxs[subject][session] = {}
-            cluster_names[subject][session] = {}
-            cluster_counts[subject][session] = {}
             cluster_tractograms[subject][session] = {}
-            cluster_tractograms_clean[subject][session] = {}
-            cluster_density_maps[subject][session] = {}
-            cluster_density_maps_clean[subject][session] = {}
 
-            for cluster_number in cluster_numbers:
-                model_names[subject][session][cluster_number] = []
-                cluster_labels[subject][session][cluster_number] = []
-                cluster_idxs[subject][session][cluster_number] = []
-                cluster_names[subject][session][cluster_number] = []
-                cluster_counts[subject][session][cluster_number] = []
-                cluster_tractograms[subject][session][cluster_number] = []
-                cluster_tractograms_clean[subject][session][cluster_number] = []
-                cluster_density_maps[subject][session][cluster_number] = []
-                cluster_density_maps_clean[subject][session][cluster_number] = []
+            for n_clusters in range_n_clusters:
+                cluster_tractograms[subject][session][n_clusters] = []
 
-                # At this point typically only one model per cluster,
-                # but it is possibile for multiple models:
-                # e.g. considering effects of different tissue properties or
-                # clustering algorithms
-                # NOTE model are sorted alphabetically
-                remote_cluster_filenames = fs.glob(f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{cluster_number}/*idx.npy')
-
-                for remote_cluter_filename in remote_cluster_filenames:
-                    # print(subject, session, remote_cluter_filename)
-                    cluster_basename = basename(remote_cluter_filename)
-                    local_cluster_filename = join(base_dir, subject, session, str(cluster_number), cluster_basename)
-
-                    if not exists(local_cluster_filename):
-                        logger.log(logging.DEBUG, f'downloading {local_cluster_filename}')
-                        fs.get(remote_cluter_filename, local_cluster_filename)
-
-                    cluster_rootname, _ = splitext(cluster_basename)
-                    cluster_rootname = cluster_rootname.rsplit('_',1)[0]
-
-                    logger.log(logging.DEBUG, f'deriving {cluster_rootname} metadata')
-                    model_names[subject][session][cluster_number].append(cluster_rootname)
-
-                    logger.log(logging.DEBUG, f'loading {local_cluster_filename}')
-                    sorted_cluster_labels = np.load(local_cluster_filename)
-                    cluster_labels[subject][session][cluster_number].append(sorted_cluster_labels)
-
-                    cluster_names[subject][session][cluster_number].append(np.unique(sorted_cluster_labels))
-                    cluster_idxs[subject][session][cluster_number].append(np.array([np.where(sorted_cluster_labels == i)[0] for i in np.unique(sorted_cluster_labels)]))
-                    cluster_counts[subject][session][cluster_number].append(np.bincount(sorted_cluster_labels))
-
-                # download the cluster tractograms and density maps
-                remote_cluster_tractograms = fs.glob(f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{cluster_number}/*.trk')
+                # only download the final cluster tractograms and generate correspoinding density maps
+                remote_cluster_tractograms = fs.glob(f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{n_clusters}/*_{cluster_type}.trk')
 
                 for remote_cluster_tractogram in remote_cluster_tractograms:
-                    
-                    # do not redownload the bundle tractogram
-                    if (remote_cluster_tractogram.endswith(f'{bundle_name}.trk')):
-                        continue
-
-                    # tractogram
                     cluster_tractogram_basename = basename(remote_cluster_tractogram)
-                    cluster_rootname, _ = splitext(cluster_tractogram_basename)
 
-                    local_cluster_tractogram = join(base_dir, subject, session, str(cluster_number), cluster_tractogram_basename)
+                    local_cluster_tractogram = join(base_dir, subject, session, str(n_clusters), cluster_tractogram_basename)
                     
                     if not exists(local_cluster_tractogram):
                         logger.log(logging.DEBUG, f'downloading {local_cluster_tractogram}')
@@ -516,42 +342,342 @@ def _download_clusters(expirement_name, base_dir, subjects, session_names, bundl
 
                     logger.log(logging.DEBUG, f'loading {local_cluster_tractogram}')
                     tractogram = load_tractogram(local_cluster_tractogram, 'same')
-                    cluster_tractograms[subject][session][cluster_number].append(tractogram)
+                    cluster_tractograms[subject][session][n_clusters].append(tractogram)
+
+    return cluster_tractograms
+
+def _download_bundle_fa_profiles(expirement_name, base_dir, subjects, session_names, bundle_name, range_n_clusters):
+    """
+    Download the bundle FA profile. 
+    
+    The bundle profile is the same regardless of n_clusters, therefore can just 
+    download first one.
+
+    Only used for quality control purposes.
+
+    Parameters
+    ----------
+    expirement_name : string
+    base_dir : string
+    subjects : list
+    session_names : list
+    bundle_names : list
+    range_n_clusters : list
+
+    Returns
+    -------
+    profiles : dict
+        dictionary with `subject` as key containing
+        └── dictionary with `session_name` as key
+            └── containing the bundle fa profile
+    """
+    import s3fs
+    from os.path import basename, exists, join
+    import numpy as np
+
+    fs = s3fs.S3FileSystem()
+
+    profiles = {}
+
+    for subject in subjects:
+        profiles[subject] = {}
+
+        for session in session_names:
+            profiles[subject][session] = {}
+
+            n_clusters = range_n_clusters[0]
+                
+            remote_profile = f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{n_clusters}/bundle_profile_fa.npy'
+
+            local_profile = join(base_dir, subject, session, basename(remote_profile))
+            
+            if not exists(local_profile):
+                logger.log(logging.DEBUG, f'downloading {local_profile}')
+                fs.get(remote_profile, local_profile)
+            
+            profiles[subject][session] = np.load(local_profile)
+
+    return profiles
+
+
+def _download_streamline_fa_profiles(expirement_name, base_dir, subjects, session_names, bundle_name, range_n_clusters):
+    """
+    Download the streamline FA profiles.
+    
+    The streamline profiles are the same regardless of n_clusters, therefore can just 
+    download first one.
+
+    Only used for quality control purposes.
+
+    Parameters
+    ----------
+    expirement_name : string
+    base_dir : string
+    subjects : list
+    session_names : list
+    bundle_names : list
+    range_n_clusters : list
+
+    Returns
+    -------
+    profiles : dict
+        dictionary with `subject` as key containing
+        └── dictionary with `session_name` as key
+            └── containing the streamline fa profiles
+    """
+
+    import s3fs
+    from os.path import basename, exists, join
+    import numpy as np
+
+    fs = s3fs.S3FileSystem()
+
+    profiles = {}
+
+    for subject in subjects:
+        profiles[subject] = {}
+
+        for session in session_names:
+            profiles[subject][session] = {}
+
+            n_clusters = range_n_clusters[0]
+
+            remote_profile = f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{n_clusters}/streamline_profile_fa.npy'
+
+            local_profile = join(base_dir, subject, session, basename(remote_profile))
                     
-                    # clean the cluster tractogram
-                    cleaned_tractogram, cleaned_tractogram_filename = clean_tractogram(tractogram, local_cluster_tractogram)
-                    cluster_tractograms_clean[subject][session][cluster_number].append(cleaned_tractogram)
+            if not exists(local_profile):
+                logger.log(logging.DEBUG, f'downloading {local_profile}')
+                fs.get(remote_profile, local_profile)
+            
+            profiles[subject][session] = np.load(local_profile)
+
+    return profiles
+
+
+def _download_cluster_fa_profiles(expirement_name, base_dir, subjects, session_names, bundle_name, range_n_clusters):
+    """
+    Download the cluster FA profiles.
+    
+    Only used for quality control purposes.
+
+    Parameters
+    ----------
+    expirement_name : string
+    base_dir : string
+    subjects : list
+    session_names : list
+    bundle_names : list
+    range_n_clusters : list
+
+    Returns
+    -------
+    profiles : dict
+        dictionary with `subject` as key containing
+        └── dictionary with `session_name` as key
+            └── containing list of cluster fa profiles
+    """
+    import s3fs
+    from os.path import basename, exists, join
+    import numpy as np
+
+    fs = s3fs.S3FileSystem()
+
+    profiles = {}
+
+    for subject in subjects:
+        profiles[subject] = {}
+
+        for session in session_names:
+            profiles[subject][session] = {}
+
+            for n_clusters in range_n_clusters:
+                profiles[subject][session][n_clusters] = []
+
+                remote_profiles = fs.glob(f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{n_clusters}/cluster_*_profile_fa.npy')
+
+                for remote_profile in remote_profiles:
+                    local_profile = join(base_dir, subject, session, str(n_clusters), basename(remote_profile))
                     
-                    # density map
-                    cluster_density_map_basename = cluster_rootname + '_density_map.nii.gz'
-                    remote_cluster_density_map = f'hcp-subbundle/{expirement_name}/{session}/{bundle_name}/{subject}/{cluster_number}/{cluster_density_map_basename}'
-                    local_cluster_density_map = join(base_dir, subject, session, str(cluster_number), cluster_density_map_basename)
+                    if not exists(local_profile):
+                        logger.log(logging.DEBUG, f'downloading {local_profile}')
+                        fs.get(remote_profile, local_profile)
                     
-                    if not exists(local_cluster_density_map) and fs.exists(remote_cluster_density_map):
-                        logger.log(logging.DEBUG, f'downloading {local_cluster_density_map}')
-                        fs.get(remote_cluster_density_map, local_cluster_density_map)
+                    profiles[subject][session][n_clusters].append(np.load(local_profile))
 
-                    # if density map doesn't exist on S3 generate locally
-                    if not exists(local_cluster_density_map):
-                        logger.log(logging.DEBUG, f'generating {local_cluster_density_map}')
-                        get_density_map(tractogram, local_cluster_tractogram)
-
-                    cluster_density_maps[subject][session][cluster_number].append(nib.load(local_cluster_density_map))
-
-                    # density map from clean tractogram
-                    cleaned_denisty_map, _ = get_density_map(cleaned_tractogram, cleaned_tractogram_filename)
-                    cluster_density_maps_clean[subject][session][cluster_number].append(cleaned_denisty_map)
+    return profiles
 
 
-    if generate_metadata:
-        import pandas as pd
-        pd.DataFrame(model_names).to_csv(join(base_dir, 'model_names.csv'))
-        pd.DataFrame(cluster_names).to_csv(join(base_dir, 'cluster_names.csv'))
-        pd.DataFrame(cluster_counts).to_csv(join(base_dir, 'cluster_counts.csv'))
+def fetch_model_data(metadata):
+    """
+    set up local directory and download necessary files for model analysis
 
-    return (
-        model_names, 
-        cluster_labels, cluster_idxs, cluster_names, cluster_counts, 
-        cluster_tractograms, cluster_tractograms_clean,
-        cluster_density_maps, cluster_density_maps_clean
-    )
+    Parameters
+    ----------
+    metadata : dict
+
+    Returns
+    -------
+    model_data : dict
+        dictionary with `bundle_name` as key containing
+        └── dictionary with following keys:
+                'fa_scalar_data', 'md_scalar_data', 
+                'adjacencies',
+                'embeddings', 'cluster_labels', 'filtered_embeddings', 'filtered_cluster_labels',
+                'bundle_tractograms', 
+                'model_cluster_tractograms', 'filtered_cluster_tractograms', 'clean_cluster_tractograms',
+                'bundle_profiles', 'streamline_profiles', 'cluster_profiles'
+    """
+    from os import makedirs
+    from os.path import join
+
+    model_data = {}
+
+    for bundle_name in metadata['experiment_bundles']:
+        model_data[bundle_name] = {}
+
+        base_dir = join(metadata['experiment_output_dir'], bundle_name)
+
+        # ensure local directories exist
+        for subject in metadata['experiment_subjects']:
+            for session in metadata['experiment_sessions']:
+                for cluster_number in metadata['experiment_range_n_clusters']:
+                    makedirs(join(base_dir, subject, session, str(cluster_number)), exist_ok=True)
+        
+        logger.log(logging.INFO, f'Download {bundle_name} data from HCP reliability study')
+        
+        for scalar in metadata['model_scalars']:
+            scalar_abr = scalar.split('.')[0]
+            model_data[bundle_name][f'{scalar_abr.lower()}_scalar_data'] = _download_scalar_data(
+                scalar, base_dir, metadata['experiment_subjects'], metadata['experiment_sessions']
+            )
+
+        model_data[bundle_name]['adjacencies'] = _download_adjacencies(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters']
+        )
+
+        model_data[bundle_name]['bundle_tractograms'] = _download_bundle_tractograms(
+            base_dir, metadata['experiment_subjects'], metadata['experiment_sessions'], bundle_name
+        )
+
+        # originals from model fit
+        model_data[bundle_name]['embeddings'] = _download_cluster_artifacts(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters'],
+            ArtifactType.EMBEDDINGS
+        )
+        model_data[bundle_name]['cluster_labels'] = _download_cluster_artifacts(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters'],
+            ArtifactType.CLUSTER_LABELS
+        )
+
+        # removed streamlines below the average silhouette score
+        model_data[bundle_name]['filtered_embeddings'] = _download_cluster_artifacts(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters'],
+            ArtifactType.EMBEDDINGS_FILTERED
+        )
+        model_data[bundle_name]['filtered_cluster_labels'] = _download_cluster_artifacts(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters'],
+            ArtifactType.CLUSTER_LABELS_FILTERED
+        )
+
+        logger.log(logging.INFO, f"Download {bundle_name} clustering models for K={metadata['experiment_range_n_clusters']}")
+        # original from model fit
+        model_data[bundle_name]['model_cluster_tractograms'] = _download_cluster_tractograms(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters'],
+            ClusterType.MODEL
+        )
+        # removed streamlines below the average silhouette score
+        model_data[bundle_name]['filtered_cluster_tractograms'] = _download_cluster_tractograms(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters'],
+            ClusterType.FILTERED
+        )
+        # cleaned
+        model_data[bundle_name]['clean_cluster_tractograms'] = _download_cluster_tractograms(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters'],
+            ClusterType.CLEAN
+        )
+
+        # profiles
+        model_data[bundle_name]['bundle_profiles'] = _download_bundle_fa_profiles(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters']
+        )
+        model_data[bundle_name]['streamline_profiles'] = _download_streamline_fa_profiles(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters']
+        )
+        model_data[bundle_name]['cluster_profiles'] = _download_cluster_fa_profiles(
+            metadata['experiment_name'], 
+            base_dir, 
+            metadata['experiment_subjects'], 
+            metadata['experiment_sessions'], 
+            bundle_name, 
+            metadata['experiment_range_n_clusters']
+        )
+
+    return model_data
+
+def make_bundle_dict(metadata):
+    """
+    create a pyAFQ bundle dictionary object for the largest number of clusters
+    in the experiment
+    """
+    bundle_dict = {}
+    
+    maximal_n_clusters = max(metadata['experiment_range_n_clusters'])
+    for bundle_name in metadata['experiment_bundles']:
+        # bundle_name_prefix = bundle_name.split('_')[0]
+        
+        for cluster_id in range(maximal_n_clusters):
+            bundle_dict[bundle_name + '_' + str(cluster_id)] = {"uid" : cluster_id}
+            # bundle_dict[bundle_name_prefix + '_' + str(cluster_id)] = {"uid" : cluster_id}
+        
+    return bundle_dict

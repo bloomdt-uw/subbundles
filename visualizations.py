@@ -1,916 +1,9 @@
 """
-visualization utilities for creating:
- * cluster profile reliabilty plots
- * model reliability comparision bar plots
- * anatomical images
+visualization utilities
 """
-# does not exist for 662551
-subjects = [
-    '103818', '105923', '111312', '114823', '115320',
-    '122317', '125525', '130518', '135528', '137128',
-    '139839', '143325', '144226', '146129', '149337',
-    '149741', '151526', '158035', '169343', '172332',
-    '175439', '177746', '185442', '187547', '192439',
-    '194140', '195041', '200109', '200614', '204521',
-    '250427', '287248', '341834', '433839', '562345',
-    '599671', '601127', '627549', '660951', # '662551', 
-    '783462', '859671', '861456', '877168', '917255'
-]
-# subjects = subjects[:2]
-session_names = ['HCP_1200', 'HCP_Retest']
+from subbundle_model_analysis_utils import ClusterType
 
-bundle_names = ['SLF_L']
-
-n_clusters = 3
-
-def load_fa_scalar_data(base_dir, csd=False):
-    import s3fs
-    from os.path import exists, join
-    import nibabel as nib
-
-    fs = s3fs.S3FileSystem()
-
-    scalar_basename = 'FA.nii.gz'
-
-    scalar_data = {}
-
-    for subject in subjects:
-        scalar_data[subject] = {}
-        for session in session_names:
-            scalar_filename = join(base_dir, subject, session, scalar_basename)
-            if not exists(scalar_filename):
-                if csd:
-                    fs.get(
-                        (
-                            f'profile-hcp-west/hcp_reliability/single_shell/'
-                            f'{session.lower()}_afq_CSD/'
-                            f'sub-{subject}/ses-01/'
-                            f'sub-{subject}_dwi_model-DTI_FA.nii.gz'
-                        ),
-                        scalar_filename
-                    )
-                else:
-                    fs.get(
-                        (
-                            f'profile-hcp-west/hcp_reliability/single_shell/'
-                            f'{session.lower()}_afq/'
-                            f'sub-{subject}/ses-01/'
-                            f'sub-{subject}_dwi_model-DTI_FA.nii.gz'
-                        ),
-                        scalar_filename
-                    )
-
-            scalar_data[subject][session] = nib.load(scalar_filename).get_fdata()
-
-    return scalar_data
-
-
-def load_md_scalar_data(base_dir, csd=False):
-    import s3fs
-    from os.path import exists, join
-    import nibabel as nib
-
-    fs = s3fs.S3FileSystem()
-
-    scalar_basename = 'MD.nii.gz'
-
-    scalar_data = {}
-
-    for subject in subjects:
-        scalar_data[subject] = {}
-        for session in session_names:
-            scalar_filename = join(base_dir, subject, session, scalar_basename)
-            if not exists(scalar_filename):
-                if csd:
-                    fs.get(
-                        (
-                            f'profile-hcp-west/hcp_reliability/single_shell/'
-                            f'{session.lower()}_afq_CSD/'
-                            f'sub-{subject}/ses-01/'
-                            f'sub-{subject}_dwi_model-DTI_MD.nii.gz'
-                        ),
-                        scalar_filename
-                    )
-                else:
-                    fs.get(
-                        (
-                            f'profile-hcp-west/hcp_reliability/single_shell/'
-                            f'{session.lower()}_afq/'
-                            f'sub-{subject}/ses-01/'
-                            f'sub-{subject}_dwi_model-DTI_MD.nii.gz'
-                        ),
-                        scalar_filename
-                    )
-
-            scalar_data[subject][session] = nib.load(scalar_filename).get_fdata()
-
-    return scalar_data
-
-
-def load_tractograms(base_dir, bundle_name, csd=False):
-    import s3fs
-    from os.path import exists, join
-    from dipy.io.streamline import load_tractogram
-    import pandas as pd
-    import matplotlib.pyplot as plt
-
-    fs = s3fs.S3FileSystem()
-
-    tractogram_basename = f'{bundle_name}.trk'
-
-    tractograms = {}
-    streamline_counts = {}
-
-    for subject in subjects:
-        tractograms[subject] = {}
-        streamline_counts[subject] = {}
-        for session in session_names:
-            tractogram_filename = join(base_dir, subject, session, tractogram_basename)
-            if not exists(tractogram_filename):
-                if csd:
-                    fs.get(
-                        (
-                            f'profile-hcp-west/hcp_reliability/single_shell/'
-                            f'{session.lower()}_afq_CSD/'
-                            f'sub-{subject}/ses-01/'
-                            f'clean_bundles/sub-{subject}_dwi_space-RASMM_model-CSD_desc-det-afq-{bundle_name}_tractography.trk'
-                        ),
-                        tractogram_filename
-                    )
-                else:
-                    fs.get(
-                        (
-                            f'profile-hcp-west/hcp_reliability/single_shell/'
-                            f'{session.lower()}_afq/'
-                            f'sub-{subject}/ses-01/'
-                            f'clean_bundles/sub-{subject}_dwi_space-RASMM_model-DTI_desc-det-afq-{bundle_name}_tractography.trk'
-                        ),
-                        tractogram_filename
-                    )
-            tractogram = load_tractogram(tractogram_filename, 'same')
-            streamline_counts[subject][session] = len(tractogram.streamlines)
-            tractograms[subject][session] = tractogram
-
-    pd.DataFrame(streamline_counts).to_csv(join(base_dir, 'streamline_counts.csv'))
-    pd.DataFrame(streamline_counts).T[1:].plot(kind='bar')
-    plt.savefig(join(base_dir, 'streamline_counts.png'))
-    plt.close()
-
-    return tractograms
-
-
-def load_clusters(base_dir, bundle_name):
-    import s3fs
-    from os.path import exists, join, basename, splitext
-    import numpy as np
-    import pandas as pd
-
-    fs = s3fs.S3FileSystem()
-
-    # name of the model; by convention includes abbreviation for clustering algorithm and adjacencies
-    model_names = {}
-
-    # cluster name assigned to each streamline
-    cluster_labels = {}
-
-    # for each cluster name, lists the corresponding streamline indexes
-    cluster_idxs = {}
-
-    # list of cluster names
-    cluster_names = {}
-
-    # number of streamlines assigned to each cluster name
-    cluster_counts = {}
-
-    for subject in subjects:
-        model_names[subject] = {}
-        cluster_labels[subject] = {}
-        cluster_idxs[subject] = {}
-        cluster_names[subject] = {}
-        cluster_counts[subject] = {}
-
-        for session in session_names:
-            model_names[subject][session] = []
-            cluster_labels[subject][session] = []
-            cluster_idxs[subject][session] = []
-            cluster_names[subject][session] = []
-            cluster_counts[subject][session] = []
-
-            # sorted alphabetically
-            remote_cluster_filenames = fs.glob(f'hcp-subbundle/{session}/{bundle_name}/{subject}/{n_clusters}/*idx.npy')
-            # NOTE Be careful BIG assumption about which models were run!
-            # which is not what want...
-            # want sc 0 - 10 followed by mase
-            # quickhack - long term should identify and separate models and hyperparameters
-            # my_order = [1, 3, 4, 5, 6, 7, 8, 9, 10, 2, 0]
-            # want mase mdf, fa mdf, fa md mdf
-            my_order = [2, 0, 1]
-            remote_cluster_filenames = [remote_cluster_filenames[i] for i in my_order]
-            # print(remote_cluster_filenames)
-
-            for remote_cluter_filename in remote_cluster_filenames:
-                # print(subject, session, remote_cluter_filename)
-                cluster_basename = basename(remote_cluter_filename)
-                local_cluster_filename = join(base_dir, subject, session, cluster_basename)
-                if not exists(local_cluster_filename):
-                    fs.get(remote_cluter_filename, local_cluster_filename)
-
-                cluster_rootname, _ = splitext(cluster_basename)
-                cluster_rootname = cluster_rootname.rsplit('_',1)[0]
-                model_names[subject][session].append(cluster_rootname)
-
-                # sorted_cluster_labels = relabel_clusters(np.load(local_cluster_filename))
-                # should now be sorted by AWS
-                sorted_cluster_labels = np.load(local_cluster_filename)
-                cluster_labels[subject][session].append(sorted_cluster_labels)
-
-                cluster_names[subject][session].append(np.unique(sorted_cluster_labels))
-                cluster_idxs[subject][session].append(np.array([np.where(sorted_cluster_labels == i)[0] for i in np.unique(sorted_cluster_labels)]))
-                cluster_counts[subject][session].append(np.bincount(sorted_cluster_labels))
-
-    pd.DataFrame(model_names).to_csv(join(base_dir, 'model_names.csv'))
-    pd.DataFrame(cluster_names).to_csv(join(base_dir, 'cluster_names.csv'))
-    pd.DataFrame(cluster_counts).to_csv(join(base_dir, 'cluster_counts.csv'))
-
-    return (model_names, cluster_labels, cluster_idxs, cluster_names, cluster_counts)
-
-
-# TODO if move bundle density map to AWS do not need this method
-def density_map(tractogram):
-    import numpy as np
-    from dipy.io.utils import create_nifti_header, get_reference_info
-    import dipy.tracking.utils as dtu
-    import nibabel as nib
-
-    affine, vol_dims, voxel_sizes, voxel_order = get_reference_info(tractogram)
-    tractogram_density = dtu.density_map(tractogram.streamlines, np.eye(4), vol_dims)
-    # force to unsigned 8-bit
-    tractogram_density = np.uint8(tractogram_density)
-    nifti_header = create_nifti_header(affine, vol_dims, voxel_sizes)
-    density_map_img = nib.Nifti1Image(tractogram_density, affine, nifti_header)
-
-    return density_map_img
-
-def get_bundle_dice_coefficients(base_dir, tractograms):
-    import time
-    from os.path import exists, join
-    from dipy.io.stateful_tractogram import StatefulTractogram
-    import numpy as np
-    import pandas as pd
-    # from AFQ.utils.volume import density_map, dice_coeff
-    from AFQ.utils.volume import dice_coeff
-    import matplotlib.pyplot as plt
-
-    tic = time.perf_counter()
-
-    bundle_dice_coef = {}
-    
-    for subject in subjects:
-        
-        test_sft = StatefulTractogram.from_sft(tractograms[subject][session_names[0]].streamlines, tractograms[subject][session_names[0]])                        
-        test_sft.to_vox()
-        test_sft_map = density_map(test_sft)
-
-        retest_sft = StatefulTractogram.from_sft(tractograms[subject][session_names[1]].streamlines, tractograms[subject][session_names[1]])                        
-        retest_sft.to_vox()
-        retest_sft_map = density_map(retest_sft)
-
-        bundle_dice_coef[subject] = dice_coeff(test_sft_map, retest_sft_map)
-
-    # TODO average bundle dice coefficient across subjects
-
-    pd.DataFrame(bundle_dice_coef, index=[0]).to_csv(join(base_dir, 'bundle_dice_coef.csv'))
-    pd.DataFrame(bundle_dice_coef, index=[0]).T[1:].plot(kind='bar')
-    plt.savefig(join(base_dir, 'bundle_dice_coef.png'))
-    plt.close()
-
-    toc = time.perf_counter()
-    print(f'total bundle dice coefficients {toc - tic:0.4f} seconds')
-
-    return bundle_dice_coef
-
-
-def get_cluster_dice_coefficients(base_dir, bundle_name, model_names, cluster_names):
-    import time
-    import itertools
-    import s3fs
-    from os.path import exists, join, basename, splitext
-    import numpy as np
-    import pandas as pd
-    from dipy.io.stateful_tractogram import StatefulTractogram
-    import nibabel as nib
-    from AFQ.utils.volume import dice_coeff
-    import matplotlib.pyplot as plt
-
-    tic = time.perf_counter()
-
-    fs = s3fs.S3FileSystem()
-
-    cluster_dice_coef = {}
-
-    for subject in subjects:
-        # _tic = time.perf_counter()
-        num_test_clusters = number_of_total_clusters(cluster_names, subject, session_names[0])
-        num_retest_clusters = number_of_total_clusters(cluster_names, subject, session_names[1])
-        # print(num_test_clusters, num_retest_clusters)
-
-        dice_coef_matrix = np.zeros((num_test_clusters, num_retest_clusters))
-
-        ii = 0
-        jj = 0
-
-        # for test_model_name, test_model_cluster_name in itertools.product(model_names[subject][session_names[0]], cluster_names[subject][session_names[0]]):
-        for test_model_name, test_model_cluster_name in zip(model_names[subject][session_names[0]], cluster_names[subject][session_names[0]]):
-            for test_cluster_name in test_model_cluster_name:
-                test_density_map_basename = f'{test_model_name}_cluster_{test_cluster_name}_density_map.nii.gz'
-                local_test_cluster_density_map_filename = join(base_dir, subject, session_names[0], test_density_map_basename)
-                if not exists(local_test_cluster_density_map_filename):
-                    remote_test_cluster_density_map_filename = f'hcp-subbundle/{session_names[0]}/{bundle_name}/{subject}/{n_clusters}/{test_density_map_basename}'
-                    fs.get(remote_test_cluster_density_map_filename, local_test_cluster_density_map_filename)
-                test_cluster_density_map = nib.load(local_test_cluster_density_map_filename)
-            
-                # for retest_model_name, retest_model_cluster_name in itertools.product(model_names[subject][session_names[1]], cluster_names[subject][session_names[1]]):
-                for retest_model_name, retest_model_cluster_name in zip(model_names[subject][session_names[1]], cluster_names[subject][session_names[1]]):
-                    for retest_cluster_name in retest_model_cluster_name:
-                        retest_density_map_basename = f'{retest_model_name}_cluster_{retest_cluster_name}_density_map.nii.gz'
-                        local_retest_cluster_density_map_filename = join(base_dir, subject, session_names[1], retest_density_map_basename)
-                        if not exists(local_retest_cluster_density_map_filename):
-                            remote_retest_cluster_density_map_filename = f'hcp-subbundle/{session_names[1]}/{bundle_name}/{subject}/{n_clusters}/{retest_density_map_basename}'
-                            fs.get(remote_retest_cluster_density_map_filename, local_retest_cluster_density_map_filename)
-                        retest_cluster_density_map = nib.load(local_retest_cluster_density_map_filename)
-                        
-                        dice_coef_matrix[ii][jj] = dice_coeff(test_cluster_density_map, retest_cluster_density_map)
-                        jj += 1
-                ii += 1
-                jj = 0
-
-        # _toc = time.perf_counter()
-        # print(subject, f'cluster dice coefficients {_toc - _tic:0.4f} seconds')
-
-        cluster_dice_coef[subject] = dice_coef_matrix
-    
-    toc = time.perf_counter()
-    print(f'total cluster dice coefficients {toc - tic:0.4f} seconds')
-
-    for subject in subjects:
-        dice_coef_matrix = cluster_dice_coef[subject]
-
-        plt.figure()
-        plt.title(f'test-retest {subject} {bundle_name} dice')
-        plt.imshow(dice_coef_matrix, cmap='hot', interpolation='nearest', vmin=0., vmax=1.)
-        plt.colorbar()
-        plt.ylabel('test')
-        plt.xlabel('retest')
-        plt.savefig(join(base_dir, f'{subject}_{bundle_name}_dice.png'))
-        plt.close()
-
-        pd.DataFrame(dice_coef_matrix).to_csv(join(base_dir, f'{subject}_{bundle_name}_dice.csv'))
-
-    return cluster_dice_coef
-
-
-def get_bundle_reliability(base_dir, scalar_abr, scalar_data, tractograms):
-    import time
-    from os.path import exists, join
-    import numpy as np
-    import pandas as pd
-    from dipy.stats.analysis import afq_profile, gaussian_weights
-    from sklearn.metrics import r2_score
-    import matplotlib.pyplot as plt
-
-    test_retest_bundle_profile_r2 = {}
-    df = pd.DataFrame(columns=["subject", "time"])
-
-    tic = time.perf_counter()
-    for subject in subjects:
-        _tic = time.perf_counter()
-        test_fa = afq_profile(
-            scalar_data[subject][session_names[0]],
-            tractograms[subject][session_names[0]].streamlines,
-            tractograms[subject][session_names[0]].affine,
-            weights=gaussian_weights(tractograms[subject][session_names[0]].streamlines)
-        )
-
-        retest_fa = afq_profile(
-            scalar_data[subject][session_names[1]],
-            tractograms[subject][session_names[1]].streamlines,
-            tractograms[subject][session_names[1]].affine,
-            weights=gaussian_weights(tractograms[subject][session_names[1]].streamlines)
-        )
-
-        test_retest_bundle_profile_r2[subject] = r2_score(test_fa, retest_fa)
-        _toc = time.perf_counter()
-        print(subject, f'bundle reliability {_toc - _tic:0.4f} seconds')
-        df = df.append({
-            'subject': subject,
-            'time': f'{_toc - _tic:0.4f}'
-        }, ignore_index=True)
-
-    toc = time.perf_counter()
-    print(f'bundle reliability {toc - tic:0.4f} seconds')
-    df = df.append({
-        'subject': 'all',
-        'time': f'{toc - tic:0.4f}'
-    }, ignore_index=True)
-    df.to_csv(join(base_dir, f'get_bundle_reliability_{scalar_abr}_time.csv'))
-
-    pd.DataFrame(test_retest_bundle_profile_r2, index=[0]).to_csv(join(base_dir, f'test_retest_bundle_profile_{scalar_abr}_r2.csv'))
-    pd.DataFrame(test_retest_bundle_profile_r2, index=[0]).T[1:].plot(kind='bar', color='tab:orange')
-    plt.savefig(join(base_dir, f'test_retest_bundle_profile_{scalar_abr}_r2.png'))
-    plt.close()
-
-    return test_retest_bundle_profile_r2
-
-def get_cluster_afq_profiles(scalar_data, cluster_names, cluster_idxs, tractograms):
-    from dipy.stats.analysis import afq_profile, gaussian_weights
-    import time
-
-    tic = time.perf_counter()
-
-    cluster_afq_profiles = {}
-    for subject in subjects:
-        cluster_afq_profiles[subject] = {}
-        for session in session_names:
-            cluster_afq_profiles[subject][session] = {}
-            ii = 0
-            print(subject, session)
-            for model_cluster_name, model_cluster_idxs in zip(cluster_names[subject][session], cluster_idxs[subject][session]):
-                # NOTE:
-                # code assumes cluster names are ordered and indexed: 0, 1, ...
-                # however with relabeling clusters across subjects still ordered,
-                # but no longer gauranteed to have a cluster 0, so:
-                # • do I update this to use index instead of cluster name?
-                # • do I add empty cluster profiles when cluster does not exist?
-                # • do I skip until ii = cluster_name? what happens when multiple models??
-                # • or just leave this code alone and calculate profiles in indentify_subbundles.
-                for cluster_name in model_cluster_name:
-                    fa_scalar_data = scalar_data[subject][session]
-                    cluster_streamlines = tractograms[subject][session].streamlines[model_cluster_idxs[cluster_name]]
-                    cluster_affine = tractograms[subject][session].affine
-
-                    cluster_profile = afq_profile(
-                        fa_scalar_data,
-                        cluster_streamlines,
-                        cluster_affine,
-                        weights=gaussian_weights(cluster_streamlines)
-                    )
-
-                    cluster_afq_profiles[subject][session][ii] = cluster_profile
-                    ii += 1
-    
-    toc = time.perf_counter()
-    print(f'cluster afq_profiles {toc - tic:0.4f} seconds')
-
-    return cluster_afq_profiles
-
-def get_cluster_reliability(base_dir, bundle_name, cluster_afq_profiles, cluster_names):
-    import time
-    from os.path import exists, join
-    import numpy as np
-    import pandas as pd
-    from dipy.stats.analysis import afq_profile, gaussian_weights
-    import matplotlib.pyplot as plt
-
-    cluster_profiles = {}
-    df = pd.DataFrame(columns=["subject", "time"])
-    tic = time.perf_counter()
-
-    for subject in subjects:
-        _tic = time.perf_counter()
-        cluster_profiles[subject] = {}
-
-        num_test_clusters = number_of_total_clusters(cluster_names, subject, session_names[0])
-        num_retest_clusters = number_of_total_clusters(cluster_names, subject, session_names[1])
-
-        profile_matrix = np.zeros((num_test_clusters, num_retest_clusters))
-
-        ii = 0
-        jj = 0
-
-        for test_model_cluster_name in cluster_names[subject][session_names[0]]:
-            for test_cluster_name in test_model_cluster_name:
-                test_cluster_profile = cluster_afq_profiles[subject][session_names[0]][ii]
-
-                for retest_model_cluster_name in cluster_names[subject][session_names[1]]:
-                    for retest_cluster_name in retest_model_cluster_name:
-                        retest_cluster_profile = cluster_afq_profiles[subject][session_names[1]][jj]
-
-                        test_retest_corr_matrix = pd.DataFrame(zip(*[test_cluster_profile, retest_cluster_profile]), columns=session_names).corr()
-
-                        # select only the upper triangle off diagonals of the correlation matrix
-                        test_retest_corr = test_retest_corr_matrix.where(np.triu(np.ones(test_retest_corr_matrix.shape), 1).astype(np.bool)).stack()
-
-                        profile_matrix[ii][jj] = test_retest_corr
-                        jj += 1
-                ii += 1
-                jj = 0
-
-        cluster_profiles[subject] = profile_matrix
-        _toc = time.perf_counter()
-        print(subject, f'cluster reliability {_toc - _tic:0.4f} seconds')
-        df = df.append({
-            'subject': subject,
-            'time': f'{_toc - _tic:0.4f}'
-        }, ignore_index=True)
-
-        plt.figure()
-        plt.title(f'test-retest {subject} {bundle_name} profile correlation')
-        plt.imshow(profile_matrix, cmap='hot', interpolation='nearest', vmin=0., vmax=1.)
-        plt.colorbar()
-        plt.ylabel('test')
-        plt.xlabel('retest')
-        plt.savefig(join(base_dir, f'{subject}_{bundle_name}_profile_corr.png'))
-        plt.close()
-
-        pd.DataFrame(profile_matrix).to_csv(join(base_dir, f'{subject}_{bundle_name}_profile_corr.csv'))
-
-    toc = time.perf_counter()
-    print(f'cluster reliability {toc - tic:0.4f} seconds')
-    df = df.append({
-        'subject': 'all',
-        'time': f'{toc - tic:0.4f}'
-    }, ignore_index=True)
-    df.to_csv(join(base_dir, 'get_cluster_reliability_time.csv'))
-
-    return cluster_profiles
-
-
-def plot_cluster_reliability(base_dir, session_names, subjects, bundle_name, scalar_abr, cluster_afq_profiles, model_names, cluster_names, n_clusters):
-    '''plot of test and retest mean afq profiles and confidence intervals per cluster in each model'''
-    from os.path import exists, join
-    import numpy as np
-    import pandas as pd
-    from dipy.stats.analysis import afq_profile, gaussian_weights
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    import math
-    
-    df = pd.DataFrame(columns=["session", "model_name", "cluster_name", "subject", "profile"])
-
-    max_value = {}
-
-    for subject in subjects:
-        for session in session_names:
-            max_value[session] = 0
-
-            ii = 0
-            for model_name, model_cluster_names in zip(model_names[subject][session][n_clusters], cluster_names[subject][session][n_clusters]):
-                for cluster_name in model_cluster_names:
-                    # if using graspologic clustering not all models generate the requested number of clusters
-                    if ii in cluster_afq_profiles[subject][session].keys():
-                        profile = cluster_afq_profiles[subject][session][ii]
-                        
-                        # find max value to set ylim
-                        profile_max_value = profile.max()
-                        if (profile_max_value > max_value[session]):
-                            max_value[session] = profile_max_value
-                        
-                        df = df.append({
-                            'session': session,
-                            'model_name': model_name,
-                            'cluster_name': cluster_name,
-                            'subject': subject,
-                            'profile': profile
-                        }, ignore_index=True)
-
-                    ii += 1
-    
-    # individual streamline cluster plots
-    if False:
-        colors = sns.color_palette()
-        
-        for session in session_names:
-            session_model_names = df.model_name.unique()
-            for model_name in session_model_names:
-                model_cluster_names = df.query(f'session == "{session}" & model_name == "{model_name}"')['cluster_name'].unique()
-                
-                for cluster_name in model_cluster_names:
-                    plt.figure()
-                    df1 = pd.DataFrame(np.array([profile for _, profile in df.query(f'session == "{session}" & model_name == "{model_name}" & cluster_name == {cluster_name}')['profile'].iteritems()]))
-                    sns.lineplot(data=df1.T, alpha=0.05, palette={colors[cluster_name]}, legend=False, dashes=False)
-                    sns.lineplot(data=df1.mean().T, color=colors[cluster_name], legend=False)
-                    plt.ylim(0, max_value*1.01)
-                    plt.xlabel('node')
-                    plt.ylabel(f'{scalar_abr}')
-                    plt.rc('axes', labelsize=14)
-                    plt.title(f'{bundle_name} {session} {model_name} cluster {cluster_name} {scalar_abr} profiles')
-                    plt.savefig(join(base_dir, f'{session}_{model_name}_cluster_{cluster_name}_{scalar_abr}_profiles.png'))
-                    plt.close()
-
-    # should correlate cluster colors across various plots (anatomical, centroid, ...)
-    # 95% ci plot
-    # cluster 0, slf 2, blue
-    # cluster 1, slf 3, purple
-    # cluster 2, slf 1, cyan
-    # colors = ['tab:blue', 'tab:purple', 'tab:cyan']
-    colors = sns.color_palette()
-    
-    for session in session_names:
-        session_model_names = df.model_name.unique()
-        for model_name in session_model_names:
-            model_cluster_names = df.query(f'session == "{session}" & model_name == "{model_name}"')['cluster_name'].unique()
-            
-            plt.figure()
-
-            for cluster_name in model_cluster_names:
-                df1 = pd.DataFrame(np.array([profile for _, profile in df.query(f'session == "{session}" & model_name == "{model_name}" & cluster_name == {cluster_name}')['profile'].iteritems()]))
-                df2 = pd.melt(frame=df1, var_name='node', value_name=f'{scalar_abr}')
-                sns.lineplot(data=df2, x='node', y=f'{scalar_abr}', color=colors[cluster_name])
-
-            # plt.ylim(0., 1.)
-            plt.ylim(0., 10**int(math.log10(abs(max(max_value.values())))))
-            plt.rc('axes', labelsize=14)
-            # plt.title(f'{bundle_name} {session} {model_name} cluster {scalar_abr} profiles')
-            plt.savefig(join(base_dir, f'{session}_{model_name}_{n_clusters}_clusters_{scalar_abr}_profile_ci.png'))
-            plt.close()
-
-
-def find_best_clusters(dice_matrix, dice_pairs=None):
-    ''' recursive function to find the best clusters based on dice coefficient scores '''    
-    import numpy as np
-
-    if dice_pairs is None:
-        dice_pairs = []
-
-    # ensure search modifies a copy
-    _dice_matrix = dice_matrix.copy()
-
-    # find the maximum dice coeffient
-    idx = np.unravel_index(np.argmax(_dice_matrix, axis=None), _dice_matrix.shape)
-    dice_pairs.append(idx)
-
-    # remove the row and column from future considersation;
-    # setting to negative dice coefficient value
-    _dice_matrix[idx[0], :] = -1
-    _dice_matrix[:, idx[1]] = -1
-    print(_dice_matrix)
-
-    if (_dice_matrix == -1*np.ones(_dice_matrix.shape)).all():
-        return dice_pairs
-    else:
-        return find_best_clusters(_dice_matrix, dice_pairs)
-
-
-def number_of_models(model_names, subject, session):
-    num_models = 0
-
-    for model_name in model_names[subject][session]:
-        num_models += 1
-
-    return num_models
-
-
-def number_of_total_clusters(cluster_names, subject, session):
-    num_clusters = 0
-
-    for names in cluster_names[subject][session]:
-        num_clusters += len(names)
-
-    return num_clusters
-
-
-def number_of_clusters(cluster_names, subject, session, model_idx):
-    num_clusters = []
-
-    for names in cluster_names[subject][session]:
-        num_clusters.append(len(names))
-
-    return num_clusters[model_idx]
-
-
-def population_visualizations(base_dir, bundle_name, bundle_dice_coef, cluster_dice_coef, bundle_profile_fa_r2, cluster_profile_fa_r2, bundle_profile_md_r2, cluster_profile_md_r2, model_names, cluster_names):
-    """
-    clusters dice and fa r2 bar chart
-    """
-    from os.path import join
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
-
-    summary_dfs = {}
-    
-    for subject in subjects:
-        summary_dfs[subject] = {}
-    
-        df = pd.DataFrame(columns=["hyperparameter", "pair", "dice", "fa_r2"])
-
-        dice_matrix = cluster_dice_coef[subject]
-        fa_profile_matrix = cluster_profile_fa_r2[subject]
-        md_profile_matrix = cluster_profile_md_r2[subject]
-
-        i = 0
-        for model_num in range(number_of_models(model_names, subject, session_names[1])):
-            test_clusters = number_of_clusters(cluster_names, subject, session_names[0], model_num)
-            retest_clusters = number_of_clusters(cluster_names, subject, session_names[1], model_num)
-
-            num_clusters = np.amin([test_clusters, retest_clusters])
-
-            
-            j = i+num_clusters
-            ij_slice = np.s_[i:j,i:j]
-            i = j
-            dice_pairs = find_best_clusters(dice_matrix[ij_slice])
-
-            k = 0
-            for dice_pair in dice_pairs:
-                df = df.append({
-                    "hyperparameter": f'{model_num}',
-                    "cluster": (n_clusters*model_num)+k,
-                    "pair": dice_pair,
-                    "dice": dice_matrix[ij_slice][dice_pair],
-                    "fa_r2": fa_profile_matrix[ij_slice][dice_pair],
-                    "md_r2": md_profile_matrix[ij_slice][dice_pair]
-                }, ignore_index=True)
-                k += 1
-
-        # TODO could plot each subject
-        df.to_csv(join(base_dir, f'{subject}_{bundle_name}_summary.csv'))
-        summary_dfs[subject] = df
-    
-    frames = []
-    for subject in subjects:
-        df = summary_dfs[subject]
-        df['subject'] = subject
-        frames.append(df)
-    bundle_df = pd.concat(frames).groupby('cluster').agg({'dice': ['mean', 'std'], 'fa_r2': ['mean', 'std'], 'md_r2': ['mean', 'std']})
-    bundle_df.to_csv(join(base_dir, f'{bundle_name}_summary.csv'))
-
-    fig, ax = plt.subplots(figsize=(20,7))
-    ax.set_ylabel('reliability')
-
-    bundle_df.dice.plot(kind='bar', y='mean', ax=ax, color='tab:blue', edgecolor='k', label='mean dice', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5), legend=False, width=0.25, position=0)
-    bundle_dice_mean = np.mean(list(bundle_dice_coef.values()))
-    ax.hlines(bundle_dice_mean, 0, len(bundle_df.index), colors='tab:blue', linestyles='dashed', label='bundle dice')
-    ax.text(1.01, bundle_dice_mean+0.01, float("{0:.4f}".format(bundle_dice_mean)), va='bottom', ha='left', bbox=dict(facecolor='tab:blue', alpha=0.5), transform=ax.get_yaxis_transform())
-
-    bundle_df.fa_r2.plot(kind='bar', y='mean', ax=ax, color='tab:orange', edgecolor='k', label='mean fa $r^2$', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5),legend=False, width=0.25, position=-1)
-    bundle_fa_mean = np.mean(list(bundle_profile_fa_r2.values()))
-    ax.hlines(bundle_fa_mean, 0, len(bundle_df.index), colors='tab:orange', linestyles='dashed', label='bundle fa $r^2$')
-    ax.text(1.01, bundle_fa_mean-0.01, float("{0:.4f}".format(bundle_fa_mean)), va='top', ha='left', bbox=dict(facecolor='tab:orange', alpha=0.5), transform=ax.get_yaxis_transform())
-
-    bundle_df.md_r2.plot(kind='bar', y='mean', ax=ax, color='tab:green', edgecolor='k', label='mean md $r^2$', alpha=0.75, yerr='std', error_kw=dict(elinewidth=0.5),legend=False, width=0.25, position=-2)
-    bundle_md_mean = np.mean(list(bundle_profile_md_r2.values()))
-    ax.hlines(bundle_md_mean, 0, len(bundle_df.index), colors='tab:green', linestyles='dashed', label='bundle md $r^2$')
-    ax.text(1.01, bundle_md_mean-0.01, float("{0:.4f}".format(bundle_md_mean)), va='top', ha='left', bbox=dict(facecolor='tab:green', alpha=0.5), transform=ax.get_yaxis_transform())
-
-    ax.set_xlabel('model:cluster\nmodels: (0:MDF, 1:MDF+FA $R^2$, 2:MDF+FA $R^2$+MD $R^2$)')
-    ax.set_xticklabels(['0:0','0:1','0:2','1:0','1:1','1:2','2:0','2:1','2:2'], rotation=0)
-
-    fig.legend()
-    plt.title(f'Test-Retest {bundle_name} (N={len(subjects)})')
-    plt.savefig(join(base_dir, f'test-retest_model_comparision.png'))
-    plt.close()
-
-
-def anatomy_visualizations(base_dir, bundle_name, subject, model_names, cluster_names, cluster_idxs, tractograms):
-    import seaborn as sns
-    import os.path as op
-    import tempfile
-    import AFQ.data as afd
-    from AFQ import api
-    from AFQ.viz.fury_backend import visualize_volume
-    from dipy.io.stateful_tractogram import StatefulTractogram
-    from dipy.viz import window, actor
-    import matplotlib.pyplot as plt
-
-    # colors = sns.color_palette("bright6")
-    colors = sns.color_palette()
-
-    for session_name in session_names:
-        pyafq = api.AFQ(
-            bids_path=op.join(afd.afq_home, session_name),
-            dmriprep='dmriprep'
-        )
-
-        # note subject may or may not exist in pyafq
-        iloc, = pyafq.data_frame.index[pyafq.data_frame['subject'] == subject]
-        row = pyafq.data_frame.loc[iloc]
-
-        volume, _ = pyafq._viz_prepare_vols(
-            row,
-            volume=None,
-            xform_volume=False,
-            color_by_volume=None,
-            xform_color_by_volume=False
-        )
-
-        for model_name, model_cluster_name, model_cluster_idxs in zip(model_names[subject][session_name], cluster_names[subject][session_name], cluster_idxs[subject][session_name]):
-            scene = window.Scene()
-
-            figure = visualize_volume(
-                volume,
-                interact=False,
-                inline=False,
-                figure=scene
-            )
-
-            figure.SetBackground(1,1,1)
-
-            num_clusters = []
-
-            # get stateful tractogram for each cluster
-            # NOTE cluster tractograms are saved on AWS so could just download
-            for cluster_name in model_cluster_name:
-                num_clusters.append(len(model_cluster_idxs[cluster_name]))
-                tg = StatefulTractogram.from_sft(tractograms[subject][session_name].streamlines[model_cluster_idxs[cluster_name]], tractograms[subject][session_name])
-                tg.to_vox()
-                streamline_actor = actor.streamtube(tg.streamlines, colors[cluster_name], linewidth=0.6)
-                figure.add(streamline_actor)
-            
-            # use tempfile so can add title
-            fname = tempfile.NamedTemporaryFile().name + '.png'
-            window.snapshot(scene, fname=fname, size=(600, 400))
-
-            plt.imshow(plt.imread(fname))
-            plt.title(f'{session_name} {bundle_name}\n{model_name}\n{subject}\n{num_clusters}')
-            plt.axis('off')
-            
-            f_name = op.join(base_dir, f'{subject}_anat_0_{session_name}_{bundle_name}_{model_name}.png')
-            print(f_name)
-            plt.savefig(f_name)
-            
-            # second perspective
-
-            figure.azimuth(90)
-            figure.roll(90)
-
-            # use tempfile so can add title
-            fname = tempfile.NamedTemporaryFile().name + '.png'
-            window.snapshot(figure, fname=fname, size=(600, 400))
-            
-            plt.imshow(plt.imread(fname))
-            plt.title(f'{session_name} {bundle_name}\n{model_name}\n{subject}\n{num_clusters}')
-            plt.axis('off')
-            
-            f_name = op.join(base_dir, f'{subject}_anat_1_{session_name}_{bundle_name}_{model_name}.png')
-            print(f_name)
-            plt.savefig(f_name)
-            plt.close()
-
-    return 1
-
-
-def save_centroids(centroids, centroids_name):
-    """
-    save individual tractogram files for each subject cluster centroid
-    
-    Parameters
-    ----------
-    centroids : dict
-    
-    centroids_name : string
-    """
-    from dipy.io.streamline import save_tractogram
-
-    for subject in centroids.keys():
-        cluster_id = 0
-        for cluster_centroid in centroids[subject]:
-            save_tractogram(cluster_centroid, f'{subject}_{cluster_id}_centroid_{centroids_name}.trk')
-            cluster_id += 1
-            
-def convert_centroids(n_clusters, mni_centroids, bundle_dict):
-    """
-    create tractogram for each mni cluster containing all subjects
-    
-    Parameters
-    ----------
-    n_clusters : int
-    mni_centroids : dict
-    bundle_dict : dict
-    """
-    
-    from dipy.io.stateful_tractogram import StatefulTractogram
-    from AFQ.utils.streamlines import bundles_to_tgram
-    from AFQ.data import read_mni_template
-
-    clusters = [[] for _ in range(n_clusters)]
-
-    for subject in mni_centroids.keys():
-        cluster_id = 0
-        for cluster_centroid in mni_centroids[subject]:
-            clusters[cluster_id].append(cluster_centroid.streamlines[0])
-            cluster_id += 1
-
-    # any subject/tractogram will do, so just grab first one
-    subject = next(iter(mni_centroids))
-    tractogram = mni_centroids[subject][0]
-    
-    bundles = {}
-    
-    cluster_id = 0
-    for bundle_name in bundle_dict.keys():
-        bundles[bundle_name] = StatefulTractogram.from_sft(clusters[cluster_id], tractogram)
-        cluster_id += 1
-
-        # note if bundle dict contains more cluster definitions then n_clusters we cans stop
-        if cluster_id == n_clusters:
-            break
-        
-    sft = bundles_to_tgram(bundles, bundle_dict, read_mni_template())
-    
-    return sft
-
-def visualize_centroids(sft, bundle_dict):
+def visualize_tractogram(sft, bundle_dict):
     """
     plotly visualzation for clusters using MNI space
     
@@ -930,6 +23,7 @@ def visualize_centroids(sft, bundle_dict):
 
     return visualize_bundles(sft, bundle_dict=bundle_dict, figure=figure)
 
+
 def visualize_subject_clusters(subject, centroids, bundle_dict):
     """
     take the subject and show the centroid for each cluster
@@ -947,7 +41,8 @@ def visualize_subject_clusters(subject, centroids, bundle_dict):
         clusters.append(cluster_centroid.streamlines[0])
     
     sft = StatefulTractogram.from_sft(clusters, cluster_centroid)
-    return visualize_centroids(sft, bundle_dict)
+    return visualize_tractogram(sft, bundle_dict)
+
 
 def display_consensus_centroids(metadata, cluster_info):
     """
@@ -959,13 +54,14 @@ def display_consensus_centroids(metadata, cluster_info):
 
     for n_clusters in metadata['experiment_range_n_clusters']:
         consensus_subject = cluster_info[n_clusters]['consensus_subject']
-        print('n_clusters', n_clusters, 'consensus subject', consensus_subject)
+        for session_name in metadata['experiment_sessions']:
+            print('n_clusters', n_clusters, 'session', session_name, 'consensus subject', consensus_subject)
+            display(visualize_subject_clusters(
+                consensus_subject,
+                cluster_info[n_clusters][session_name]['centroids'],
+                metadata['experiment_bundle_dict']
+            ))
 
-        display(visualize_subject_clusters(
-            consensus_subject,
-            cluster_info[n_clusters]['centroids'],
-            metadata['experiment_bundle_dict']
-        ))
 
 def display_subject_centriods(metadata, cluster_info, subject_id):
     """
@@ -975,106 +71,966 @@ def display_subject_centriods(metadata, cluster_info, subject_id):
     from IPython.display import display
 
     for n_clusters in metadata['experiment_range_n_clusters']:
-        print('n_clusters', n_clusters, 'subject', subject_id)
+        for session_name in metadata['experiment_sessions']:
+            print('n_clusters', n_clusters, 'session', session_name, 'subject', subject_id)
+            display(visualize_subject_clusters(
+                subject_id,
+                cluster_info[n_clusters][session_name]['centroids'],
+                metadata['experiment_bundle_dict']
+            ))
 
-        display(visualize_subject_clusters(
-            subject_id,
-            cluster_info[n_clusters]['centroids'],
-            metadata['experiment_bundle_dict']
-        ))
 
 def display_streamline_count_centroids(metadata, cluster_info):
     from IPython.display import display
+    from identify_subbundles import convert_centroids
 
     for n_clusters in metadata['experiment_range_n_clusters']:
-        mni_prealign_sft = convert_centroids(n_clusters, cluster_info[n_clusters]['centroids'], metadata['experiment_bundle_dict'])
-        display(visualize_centroids(mni_prealign_sft, metadata['experiment_bundle_dict']))
+        for session_name in metadata['experiment_sessions']:
+            print('n_clusters', n_clusters, 'session', session_name)
+            mni_prealign_sft = convert_centroids(
+                n_clusters,
+                cluster_info[n_clusters][session_name]['centroids'],
+                metadata['experiment_bundle_dict']
+            )
+            display(visualize_tractogram(mni_prealign_sft, metadata['experiment_bundle_dict']))
 
-def _visualize_centroids_by(metadata, bundle_name, n_clusters, consensus, algorithm):
+
+def display_centroids(metadata, cluster_info):
+    from os.path import join
+    from IPython.display import display
+    from identify_subbundles import match_clusters, get_relabeled_centroids, convert_centroids
+
+    base_dir = join(metadata['experiment_output_dir'], metadata['bundle_name'])
+
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        for session_name in metadata['experiment_sessions']:
+            print('n_clusters', n_clusters, 'session_name', session_name)
+            match_clusters(
+                base_dir,
+                session_name,
+                metadata['experiment_subjects'],
+                cluster_info,
+                cluster_info[n_clusters]['consensus_subject'],
+                n_clusters,
+                metadata['algorithm']
+            )
+
+            _mni_centroids = get_relabeled_centroids(metadata, n_clusters, session_name, cluster_info[n_clusters]['consensus_subject'])
+        
+            _mni_sft = convert_centroids(n_clusters, _mni_centroids, metadata['experiment_bundle_dict'])
+            display(visualize_tractogram(_mni_sft, metadata['experiment_bundle_dict']))
+
+
+def display_population_cluster_profile(metadata, cluster_profiles, scalar_name, n_clusters):
     """
-    show effect of different match algorithms on clusters
-    
-    Parameters
-    ----------
-    n_clusters : int
-    consensus : string
-    algorithm : string
+    plot of test and retest mean afq profiles and confidence intervals per cluster in each model
     """
-    from identify_subbundles import get_relabeled_centroids
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import math
+
+    df = pd.DataFrame(columns=["session", "cluster_name", "subject", "profile"])
+
+    max_value = {}
+
+    for subject in metadata['experiment_subjects']:
+        for session in metadata['experiment_sessions']:
+            max_value[session] = 0
+
+            for cluster_label in range(n_clusters):
+                profile = cluster_profiles[subject][session][cluster_label]
+                
+                # find max value to set ylim
+                profile_max_value = profile.max()
+                if (profile_max_value > max_value[session]):
+                    max_value[session] = profile_max_value
+                
+                df = df.append({
+                    'session': session,
+                    'cluster_label': cluster_label,
+                    'subject': subject,
+                    'profile': profile
+                }, ignore_index=True)
     
-    _mni_centroids = get_relabeled_centroids(metadata, bundle_name, n_clusters, consensus, algorithm)
+    colors = sns.color_palette()
     
-    _mni_sft = convert_centroids(n_clusters, _mni_centroids, metadata['experiment_bundle_dict'])
-    return visualize_centroids(_mni_sft, metadata['experiment_bundle_dict'])
+    for session in metadata['experiment_sessions']:
+        print(session, n_clusters)
+        plt.figure()
 
-def display_maxdice_centroids(metadata, cluster_info, bundle_name):
-    from os.path import join
+        for cluster_label in range(n_clusters):
+            df1 = pd.DataFrame(np.array([profile for _, profile in df.query(f'session == "{session}" & cluster_label == {cluster_label}')['profile'].iteritems()]))
+            df2 = pd.melt(frame=df1, var_name='node', value_name=scalar_name)
+            sns.lineplot(data=df2, x='node', y=scalar_name, color=colors[cluster_label])
+
+        plt.ylim(0., 10**int(math.log10(abs(max(max_value.values())))))
+        plt.rc('axes', labelsize=14)
+        plt.show()
+        plt.close()
+
+
+def display_population_cluster_profiles(metadata, cluster_afq_profiles):
+    """
+    display the scalar profiles for each `n_clusters`
+    """
+    import itertools
+
+    for n_clusters, scalar in itertools.product(metadata['experiment_range_n_clusters'], metadata['model_scalars']):
+        scalar_name = scalar.split('.')[0].replace('_', ' ')
+        display_population_cluster_profile(
+            metadata,
+            cluster_afq_profiles[n_clusters][scalar],
+            scalar_name,
+            n_clusters
+        )
+
+def plot_silhouette_scores(embedding, cluster_labels):
+    """
+    see Selecting the number of clusters with silhouette analysis on KMeans clustering
+    https://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_silhouette_analysis.html
+
+    e.g.
+    embedding : np.load('mase_kmeans_fa_r2_is_mdf_embeddings_filtered.npy')
+    cluster_labels : np.load('mase_kmeans_fa_r2_is_mdf_cluster_labels_filtered.npy')
+    """
+    import numpy as np
+    from sklearn.metrics import silhouette_samples, silhouette_score
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    import seaborn as sns
+
+    n_clusters = len(np.unique(cluster_labels))
+
+    average_silhouette_score = silhouette_score(embedding, cluster_labels)
+    sample_silhouette_scores = silhouette_samples(embedding, cluster_labels)
+    
+    plt.figure()
+    ax = plt.gca()
+    # The silhouette scores can range from -1, 1
+#         ax.set_xlim([-1,1])
+    ax.set_xlim([-0.2,1])
+    # The (n_clusters+1)*10 is for inserting blank space between silhouette
+    # plots of individual clusters
+    ax.set_ylim([0, len(embedding) + (n_clusters + 1) * 10])
+    
+    y_lower = 10
+    
+    for i in range(n_clusters):
+        ith_cluster_silhouette_scores = \
+            sample_silhouette_scores[cluster_labels == i]
+
+        ith_cluster_silhouette_scores.sort()
+
+        size_cluster_i = ith_cluster_silhouette_scores.shape[0]
+        
+        y_upper = y_lower + size_cluster_i
+        
+        ax.fill_betweenx(
+            np.arange(y_lower, y_upper),
+            0, 
+            ith_cluster_silhouette_scores,
+            cmap = ListedColormap(sns.color_palette()),
+            alpha=0.7
+        )
+
+        ax.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+        y_lower = y_upper + 10
+
+    ax.set_title("The silhouette plot.")
+    ax.set_xlabel("The silhouette scores")
+    ax.set_ylabel("Cluster label")
+
+    # The vertical line for average silhouette score of all the values
+    ax.axvline(x=average_silhouette_score, color="red", linestyle="--")
+
+    ax.set_yticks([])  # Clear the yaxis labels / ticks
+#         ax.set_xticks(list(np.arange(-10, 12, 2)/10))
+    ax.set_xticks(list(np.arange(0, 12, 2)/10))
+
+    plt.show()
+    plt.close()
+    
+    
+def plot_pairplot(embedding, cluster_labels):
+    """
+    e.g.
+    embedding : np.load('mase_kmeans_fa_r2_is_mdf_embeddings_filtered.npy')
+    cluster_labels : np.load('mase_kmeans_fa_r2_is_mdf_cluster_labels_filtered.npy')
+    """
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    n_clusters = len(np.unique(cluster_labels))
+
+    df = pd.DataFrame(embedding)
+    df_labels = pd.DataFrame(cluster_labels, columns=['Type'])
+    df = pd.concat([df_labels, df], axis=1)
+    
+    plt.figure()
+    sns.pairplot(
+        df,
+        hue='Type',
+        palette=sns.color_palette()[:n_clusters]
+    )
+    
+    plt.show()
+    plt.close()
+
+
+def plot_profile(streamline_profile, bundle_profile, cluster_profiles):
+    """
+    streamline_profile : np.load('streamline_profile_fa.npy')
+    bundle_profile : np.load('bundle_profile_fa.npy')
+    cluster_profiles : [np.load('cluster_0_profile_fa.npy') ... ]
+
+    TODO: could create a wrapper to plot subject, session, n_clusters
+    TODO: could order cluster_profiles by relabeling algorithm
+    """
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    pd.DataFrame(streamline_profile.T).plot(color='blue', alpha=0.01, legend=False)
+    pd.Series(bundle_profile, name='bundle').plot(color='black')
+
+    cluster_label = 0
+    for cluster_profile in cluster_profiles:
+        pd.Series(cluster_profile, name=f'cluster {cluster_label}').plot(color=sns.color_palette()[cluster_label])
+        cluster_label += 1
+
+    plt.show()
+    plt.close()
+
+
+def get_bundle_anatomy_figures(metadata, model_data, subject):
+    """
+    TODO: plot appropriate bundle color
+    """
     from IPython.display import display
-    from identify_subbundles import match_clusters, Algorithm
+    from AFQ.api import make_bundle_dict
+    from identify_subbundles import move_tractogram_to_MNI_space
 
-    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+    bundle_anatomy_figures = {}
+
+    for session_name in metadata['experiment_sessions']:
+        
+        print(metadata['bundle_name'], subject, session_name)
+        sft = model_data[metadata['bundle_name']]['bundle_tractograms'][subject][session_name]
+        sft = move_tractogram_to_MNI_space(session_name, subject, sft)
+        bundle_anatomy_figures[session_name] = visualize_tractogram(sft, make_bundle_dict())
+
+    return bundle_anatomy_figures
+
+def add_colorbar(im, aspect=5, pad_fraction=0.5, **kwargs):
+    """Add a vertical color bar to an image plot."""
+    import matplotlib.pyplot as plt
+    from mpl_toolkits import axes_grid1
+    
+    divider = axes_grid1.make_axes_locatable(im.axes)
+    width = axes_grid1.axes_size.AxesY(im.axes, aspect=1./aspect)
+    pad = axes_grid1.axes_size.Fraction(pad_fraction, width)
+    current_ax = plt.gca()
+    cax = divider.append_axes("right", size=width, pad=pad)
+    plt.sca(current_ax)
+    return im.axes.figure.colorbar(im, cax=cax, **kwargs)
+
+
+def plot_adjacencies(metadata, model_data, subject):
+    import matplotlib.pyplot as plt
+    
+    for session_name in metadata['experiment_sessions']:
+        print(metadata['bundle_name'], subject, session_name)
+        adjacencies = model_data[metadata['bundle_name']]['adjacencies'][subject][session_name]
+
+        for adjacency in adjacencies:
+            im = plt.imshow(adjacency, cmap='hot', interpolation='nearest')
+            add_colorbar(im)
+            plt.show()
+            plt.close()
+
+
+def plot_artifacts(metadata, model_data, subject, n_clusters):
+    for session_name in metadata['experiment_sessions']:
+        print(metadata['bundle_name'], n_clusters, subject, session_name)
+        filtered_embeddings = model_data[metadata['bundle_name']]['filtered_embeddings'][subject][session_name][n_clusters]
+        filtered_cluster_labels = model_data[metadata['bundle_name']]['filtered_cluster_labels'][subject][session_name][n_clusters]
+
+        plot_silhouette_scores(filtered_embeddings, filtered_cluster_labels)
+        plot_pairplot(filtered_embeddings, filtered_cluster_labels)
+
+
+def plot_scalar_profiles(metadata, model_data, subject, n_clusters):
+    for session_name in metadata['experiment_sessions']:
+        print(metadata['bundle_name'], n_clusters, subject, session_name, 'FA')
+        streamline_profile = model_data[metadata['bundle_name']]['streamline_profiles'][subject][session_name]
+        bundle_profile = model_data[metadata['bundle_name']]['bundle_profiles'][subject][session_name]
+        cluster_profiles = model_data[metadata['bundle_name']]['cluster_profiles'][subject][session_name][n_clusters]
+        plot_profile(streamline_profile, bundle_profile, cluster_profiles)
+
+
+def plot_cluster_streamlines(metadata, model_data, subject, n_clusters):
+    """
+    TODO plot all in one
+    """
+    from IPython.display import display
+    from identify_subbundles import move_tractogram_to_MNI_space
+
+    for session_name in metadata['experiment_sessions']:
+        print(metadata['bundle_name'], n_clusters, subject, session_name)
+        sfts = model_data[metadata['bundle_name']]['clean_cluster_tractograms'][subject][session_name][n_clusters]
+
+        for sft in sfts:
+            sft = move_tractogram_to_MNI_space(session_name, subject, sft)
+            display(visualize_tractogram(sft, metadata['experiment_bundle_dict']))
+
+
+def show_choose_k_data(data):
+    """
+    Little visualization to show average root mean squared error across test-retest
+    """
+    from IPython.display import display
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    
+    n_clusters = len(data)
+    Ks = [k+1 for k in list(range(n_clusters))]
+    df = pd.DataFrame(data, index=Ks)
+#     display(df)
+
+    # per subject avgRMSE
+    plt.figure()
+    ax = df.plot(legend=False)
+    ax.locator_params(integer=True)
+    plt.show()
+    # display(ax)
+    
+    # population average avgRMSE
+    plt.figure()
+    ax = df.mean(axis=1).plot(legend=False, color='black')
+    ax.locator_params(integer=True)
+    plt.show()
+    # display(ax)
+
+
+def display_population_bundle_profiles(metadata, bundle_profiles, scalar_name='DTI FA'):
+    """
+    plots the mean and 95 percent confidence interval population bundle profiles for each session
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import seaborn as sns
+    
+    df = pd.DataFrame(columns=["session", "subject", "profile"])
+    
+    for subject in metadata['experiment_subjects']:
+        for session in metadata['experiment_sessions']:
+            profile = bundle_profiles[subject][session]
+            df = df.append({
+                'session': session,
+                'subject': subject,
+                'profile': profile
+            }, ignore_index=True)
+            
+    
+    for session in metadata['experiment_sessions']:
+        print(session)
+        plt.figure()
+
+        df1 = pd.DataFrame(np.array([profile for _, profile in df.query(f'session == "{session}"')['profile'].iteritems()]))
+        df2 = pd.melt(frame=df1, var_name='node', value_name=scalar_name)
+        sns.lineplot(data=df2, x='node', y=scalar_name, color='black')
+        plt.rc('axes', labelsize=14)
+        plt.show()
+        plt.close()
+
+
+def get_bundle_streamline_count(metadata, model_data, subject):
+    """
+    For `subject` gets streamline counts for both test and retest sessions
+
+    Returns
+    -------
+    DataFrame : one row for `subject` with two columns for `sessions`
+    """
+    import pandas as pd
+    
+    data = {}
+    for session_name in metadata['experiment_sessions']:
+        data[session_name] = [len(model_data[metadata['bundle_name']]['bundle_tractograms'][subject][session_name])]
+
+    return pd.DataFrame(data, index=[subject])
+
+def get_consensus_streamline_counts(metadata, model_data, cluster_info):
+    """
+    For each `n_clusters` gets the `consensus_subject` streamline counts for both test and retest sessions
+
+    Returns
+    -------
+    DataFrame : with row for each `consensus_subject` with two columns for `sessions`
+    """
+    import pandas as pd
+    
+    dfs = []
+    
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        df = get_bundle_streamline_count(metadata, model_data, cluster_info[n_clusters]['consensus_subject'])
+        df.insert(0, 'n_clusters', n_clusters)
+        dfs.append(df)
+        
+    return pd.concat(dfs)
+
+def get_bundle_streamline_counts(metadata, model_data):
+    """
+    Returns
+    -------
+    DataFrame : with row for each `subject` with two columns for `sessions`
+    """
+    import pandas as pd
+    
+    dfs = []
+    
+    for subject in metadata['experiment_subjects']:
+        dfs.append(get_bundle_streamline_count(metadata, model_data, subject))
+    
+    return pd.concat(dfs)
+
+def get_bundle_streamline_stats(metadata, model_data):
+    """
+    Returns
+    -------
+    DataFrame : descriptive statistics for population
+    """
+    
+    df = get_bundle_streamline_counts(metadata, model_data)
+
+    return df.describe()
+
+
+def display_bundle_streamline_stats(metadata, model_data):
+    from IPython.display import display
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    
+    bss = get_bundle_streamline_stats(
+        metadata, model_data
+    )
+
+    display(
+        bss.style.set_caption(f"{metadata['bundle_name']} streamline count statistics")
+    )
+
+    sns.violinplot(data=get_bundle_streamline_counts(metadata, model_data), color='gray')
+    plt.show()
+    
+    # bar plot
+#     bss.loc['mean'].plot(kind='bar', color='gray', yerr=bss.loc['std'])
+#     plt.show()
+
+
+def get_bundle_dice_coeff_stats(bundle_dice_coeffs):
+    """
+    Returns
+    -------
+    DataFrame : descriptive statistics for population
+    """
+    import pandas as pd
+
+    df = pd.DataFrame(bundle_dice_coeffs, index=['weighted dice coeff'])
+
+    return df.T.describe()
+
+
+def display_bundle_dice_coeff_stats(metadata, bundle_dice_coeffs):
+    from IPython.display import display
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    bdcs = get_bundle_dice_coeff_stats(
+        bundle_dice_coeffs
+    )
+
+    display(
+        bdcs.style.set_caption(f"{metadata['bundle_name']} bundle weighted dice coefficient statistics")
+    )
+    
+    df = pd.DataFrame(bundle_dice_coeffs, index=['weighted dice coeff'])
+    sns.violinplot(data=df.T, color='gray')
+    plt.show()
+
+#     bdcs.loc['mean'].plot(kind='bar', color='gray', yerr=bdcs.loc['std'])
+#     plt.show()
+    
+
+def get_bundle_profile_reliability(metadata, bundle_profiles, scalar_name='DTI FA'):
+    import numpy as np
+    import pandas as pd
+    
+    test_retest_bundle_profile_corr = {}
+    
+    for subject in metadata['experiment_subjects']:
+        test_fa = bundle_profiles[subject][metadata['experiment_sessions'][0]]
+        retest_fa = bundle_profiles[subject][metadata['experiment_sessions'][1]]
+        
+        test_retest_bundle_profile_corr[subject] = np.corrcoef(test_fa, retest_fa)[0, 1]
+
+    return pd.DataFrame(test_retest_bundle_profile_corr, index=[f'{scalar_name} pearson r'])
+
+def get_bundle_profile_reliability_stats(metadata, bundle_profiles, scalar_name='DTI FA'):
+    """
+    Returns
+    -------
+    DataFrame : descriptive statistics for population
+    """
+
+    df = get_bundle_profile_reliability(metadata, bundle_profiles, scalar_name)
+
+    return df.T.describe()
+
+
+def display_bundle_profile_reliability_stats(metadata, bundle_profiles, scalar_name='DTA FA'):
+    from IPython.display import display
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    bprs = get_bundle_profile_reliability_stats(
+        metadata,
+        bundle_profiles
+    )
+    
+    display(
+        bprs.style.set_caption(f"{metadata['bundle_name']} {scalar_name} pearsons r statistics")
+    )
+
+    df = get_bundle_profile_reliability(metadata, bundle_profiles, scalar_name)
+    sns.violinplot(data=df.T, color='gray')
+    plt.show()
+    
+
+#     bprs.loc['mean'].plot(kind='bar', color='gray', yerr=bprs.loc['std'])
+#     plt.show()
+    
+def get_cluster_streamline_counts(metadata, model_data, cluster_type=ClusterType.CLEAN):
+    import pandas as pd
+    
+    dfs = []
 
     for n_clusters in metadata['experiment_range_n_clusters']:
-        match_clusters(
-            base_dir,
-            metadata['experiment_test_session'],
-            metadata['model_name'],
-            metadata['experiment_subjects'],
-            cluster_info[n_clusters]['tractograms'],
-            cluster_info[n_clusters]['tractograms_filenames'],
-            cluster_info[n_clusters]['consensus_subject'],
-            n_clusters,
-            Algorithm.MAXDICE
-        )
+        data = {}
 
-        display(_visualize_centroids_by(
-            metadata, bundle_name, n_clusters, cluster_info[n_clusters]['consensus_subject'], Algorithm.MAXDICE)
-        )
+        for subject in metadata['experiment_subjects']:
+            data[subject] = {}
+            for session in metadata['experiment_sessions']:
+                for cluster_id in range(n_clusters):
+                    sft = model_data[metadata['bundle_name']][f'{cluster_type}_cluster_tractograms'][subject][session][n_clusters][cluster_id]
+                    data[subject][session + ' cluster ' + str(cluster_id)] = len(sft)
 
-def display_munkres_centroids(metadata, cluster_info, bundle_name):
-    from os.path import join
+
+        dfs.append(pd.DataFrame(data).T)
+        
+    return dfs
+
+
+def display_cluster_streamline_count_stats(metadata, csc, n_clusters):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
     from IPython.display import display
-    from identify_subbundles import match_clusters, Algorithm
 
-    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+    idx = metadata['experiment_range_n_clusters'].index(n_clusters)
+    
+    cscs = csc[idx].describe()
+    
+    display(
+        cscs.style.set_caption(f"{metadata['bundle_name']} K={n_clusters} cluster streamline count statistics")
+    )
+
+    ax = sns.violinplot(data=csc[idx], palette=sns.color_palette(as_cmap=True)[0:n_clusters]*2)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=40, ha="right")
+    plt.show()
+
+#     colors = sns.color_palette()
+#     cscs.loc['mean'].plot(kind='bar', color=colors[0:n_clusters]*2, yerr=cscs.loc['std'])
+#     plt.show()
+
+
+def get_cluster_dice_coeff_stats(cluster_dice_coeffs, n_clusters):
+    import pandas as pd
+    # from IPython.display import display
+
+    cdc = pd.DataFrame(cluster_dice_coeffs[n_clusters], index=list(range(n_clusters)))
+    
+    # TODO noticed some low overlaps in the first bundle
+    # which is unexpected since supposedly maximizing trace of weighted dice.
+    # display(cdc)
+    
+    return cdc.T.describe()
+
+
+def display_cluster_dice_coef(metadata, cluster_dice_coeffs, n_clusters, bundle_mean):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    from IPython.display import display
+    import pandas as pd
+
+    colors = sns.color_palette()
+
+    cdcs = get_cluster_dice_coeff_stats(cluster_dice_coeffs, n_clusters)
+    
+    display(
+        cdcs.style.set_caption(f"{metadata['bundle_name']} K={n_clusters} cluster weighted dice coefficient statistics")
+    )
+
+    cdc = pd.DataFrame(cluster_dice_coeffs[n_clusters], index=list(range(n_clusters)))
+    ax = sns.violinplot(data=cdc.T, palette=sns.color_palette(as_cmap=True)[0:n_clusters])
+    ax.axhline(y=bundle_mean, color="red", linestyle="--")
+    plt.show()
+
+    # print(f"{metadata['bundle_name']} K={n_clusters}")
+    # ax = cdcs.loc['mean'].plot(kind="bar", color=colors, yerr=cdcs.loc['std'])
+    # ax.axhline(y=bundle_mean, color="red", linestyle="--")
+    # plt.show()
+
+
+def get_cluster_profile_reliability(metadata, cluster_afq_profiles):
+    import pandas as pd
+    import numpy as np
+
+    dfs = []
 
     for n_clusters in metadata['experiment_range_n_clusters']:
-        match_clusters(
-            base_dir,
-            metadata['experiment_test_session'],
-            metadata['model_name'],
-            metadata['experiment_subjects'],
-            cluster_info[n_clusters]['tractograms'],
-            cluster_info[n_clusters]['tractograms_filenames'],
-            cluster_info[n_clusters]['consensus_subject'],
-            n_clusters,
-            Algorithm.MUNKRES
-        )
+        fa_profiles = cluster_afq_profiles[n_clusters][metadata['model_scalars'][0]]
+        test_retest_cluster_profile_r2 = {}
 
-        display(_visualize_centroids_by(
-            metadata, bundle_name, n_clusters, cluster_info[n_clusters]['consensus_subject'], Algorithm.MUNKRES)
-        )
+        for subject in metadata['experiment_subjects']:
+            test_retest_cluster_profile_r2[subject] = {}
+            subject_fa_profiles = fa_profiles[subject]
 
-def display_mdf_centroids(metadata, cluster_info, bundle_name):
-    from os.path import join
+            for cluster_id in range(n_clusters):
+                test_fa = subject_fa_profiles[metadata['experiment_sessions'][0]][cluster_id]
+                retest_fa = subject_fa_profiles[metadata['experiment_sessions'][1]][cluster_id]
+
+                test_retest_cluster_profile_r2[subject][cluster_id] = np.corrcoef(test_fa,retest_fa)[0, 1]
+                # check pearsonr and np.corrcoef same thing
+                # print(np.corrcoef(test_fa,retest_fa)[0, 1], pearsonr(test_fa,retest_fa))
+
+        dfs.append(pd.DataFrame(test_retest_cluster_profile_r2, index=list(range(n_clusters))))
+
+    return dfs
+
+
+def display_cluster_profile_reliability_stats(metadata, cpr, n_clusters, bundle_mean):
+    import matplotlib.pyplot as plt
+    import seaborn as sns
     from IPython.display import display
-    from identify_subbundles import match_clusters, Algorithm
+    
+    colors = sns.color_palette()
 
-    base_dir = join(metadata['experiment_output_dir'], bundle_name)
+    idx = metadata['experiment_range_n_clusters'].index(n_clusters)
+    
+    cprs = cpr[idx].T.describe()
+    
+    display(
+        cprs.style.set_caption(f"{metadata['bundle_name']} K={n_clusters} DTI FA pearson r statistics")
+    )
+    
+    ax = sns.violinplot(data=cpr[idx].T, palette=sns.color_palette(as_cmap=True)[0:n_clusters])
+    ax.axhline(y=bundle_mean, color="red", linestyle="--")
+    plt.show()
+
+#     print(f"{metadata['bundle_name']} K={n_clusters}")
+#     ax = cprs.loc['mean'].plot(kind='bar', color=colors, yerr=cprs.loc['std'])
+#     ax.axhline(y=bundle_mean, color="red", linestyle="--")
+#     plt.show()
+
+
+def get_consensus_bundle_anatomy_figures(metadata, model_data, cluster_info):
+    cluster_figures = {}
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        consensus_subject = cluster_info[n_clusters]['consensus_subject']
+        cluster_figures[n_clusters] = get_bundle_anatomy_figures(metadata, model_data, consensus_subject)
+    return cluster_figures
+
+def get_consensus_bundle_anatomy_figures(metadata, model_data, cluster_info, n_clusters):
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    return get_bundle_anatomy_figures(metadata, model_data, consensus_subject)
+
+
+def get_bundle_dice_coeff(bundle_dice_coeffs, subject):
+    import pandas as pd
+    
+    return pd.DataFrame({'weighted dice coeff': bundle_dice_coeffs[subject]}, index=[subject])
+
+def get_consensus_bundle_dice_coeff(metadata, bundle_dice_coeffs, cluster_info):
+    import pandas as pd
+    
+    dfs = []
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        df = get_bundle_dice_coeff(bundle_dice_coeffs, cluster_info[n_clusters]['consensus_subject'])
+        df.insert(0, 'n_clusters', n_clusters)
+        dfs.append(df)
+
+    return pd.concat(dfs)
+
+def get_consensus_bundle_profile_reliability(metadata, bundle_profiles, cluster_info, scalar_name='DTI FA'):
+    import pandas as pd
+
+    dfs = []
 
     for n_clusters in metadata['experiment_range_n_clusters']:
-        match_clusters(
-            base_dir,
-            metadata['experiment_test_session'],
-            metadata['model_name'],
-            metadata['experiment_subjects'],
-            cluster_info[n_clusters]['centroids'],
-            {},
-            cluster_info[n_clusters]['consensus_subject'],
-            n_clusters,
-            Algorithm.CENTROID
+        dfs.append(get_consensus_bundle_profile_reliability(metadata, bundle_profiles, cluster_info, n_clusters, scalar_name))
+
+    return pd.concat(dfs)
+
+def get_consensus_bundle_profile_reliability(metadata, bundle_profiles, cluster_info, n_clusters, scalar_name='DTI FA'):
+    import numpy as np
+    import pandas as pd
+
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    test_fa = bundle_profiles[consensus_subject][metadata['experiment_sessions'][0]]
+    retest_fa = bundle_profiles[consensus_subject][metadata['experiment_sessions'][1]]
+    
+    return pd.DataFrame({'n_clusters': n_clusters, f'{scalar_name} pearson r': np.corrcoef(test_fa, retest_fa)[0, 1]}, index=[consensus_subject])
+
+def display_consensus_adjacencies(metadata, model_data, cluster_info):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_adjacencies(metadata, model_data, cluster_info, n_clusters)
+
+def display_consensus_adjacencies(metadata, model_data, cluster_info, n_clusters):
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    plot_adjacencies(metadata, model_data, consensus_subject)
+
+def display_consensus_model_artifacts(metadata, model_data, cluster_info):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_model_artifacts(metadata, model_data, cluster_info, n_clusters)
+
+def display_consensus_model_artifacts(metadata, model_data, cluster_info, n_clusters):
+    for session_name in metadata['experiment_sessions']:
+        consensus_subject = cluster_info[n_clusters]['consensus_subject']
+        print(metadata['bundle_name'], n_clusters, consensus_subject, session_name)
+        embeddings = model_data[metadata['bundle_name']]['embeddings'][consensus_subject][session_name][n_clusters]
+        cluster_labels = model_data[metadata['bundle_name']]['cluster_labels'][consensus_subject][session_name][n_clusters]
+
+        plot_silhouette_scores(embeddings, cluster_labels)
+        plot_pairplot(embeddings, cluster_labels)
+
+def display_consensus_filtered_artifacts(metadata, model_data, cluster_info):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_filtered_artifacts(metadata, model_data, cluster_info, n_clusters)
+
+def display_consensus_filtered_artifacts(metadata, model_data, cluster_info, n_clusters):
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    plot_artifacts(metadata, model_data, consensus_subject, n_clusters)
+
+def display_streamline_bundle_profile(metadata, model_data, subject, session_name):
+    """
+    plot streamline and bundle profiles
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    print(metadata['bundle_name'], subject, session_name)
+    
+    streamline_profile = model_data[metadata['bundle_name']]['streamline_profiles'][subject][session_name]
+    bundle_profile = model_data[metadata['bundle_name']]['bundle_profiles'][subject][session_name]
+    
+    pd.DataFrame(streamline_profile.T).plot(color='blue', alpha=0.01, legend=False)
+    pd.Series(bundle_profile, name='bundle').plot(color='black')
+    
+    plt.show()
+    plt.close()
+    
+def display_consensus_streamline_bundle_profile(metadata, model_data, cluster_info):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_streamline_bundle_profile(metadata, model_data, cluster_info, n_clusters)
+
+def display_consensus_streamline_bundle_profile(metadata, model_data, cluster_info, n_clusters):
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    for session in metadata['experiment_sessions']:
+        display_streamline_bundle_profile(metadata, model_data, consensus_subject, session)
+
+def display_cluster_profile(metadata, model_data, subject, session_name, n_clusters):
+    """
+    plot cluster profiles
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    print(metadata['bundle_name'], n_clusters, subject, session_name)
+    
+    cluster_profiles = model_data[metadata['bundle_name']]['cluster_profiles'][subject][session_name][n_clusters]
+    
+    cluster_label = 0
+    for cluster_profile in cluster_profiles:
+        pd.Series(cluster_profile, name=f'cluster {cluster_label}').plot(color=sns.color_palette()[cluster_label])
+        cluster_label += 1
+    
+    plt.show()
+    plt.close()
+
+def display_consensus_cluster_profiles(metadata, model_data, cluster_info):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_cluster_profiles(metadata, model_data, cluster_info, n_clusters)
+
+
+def display_consensus_cluster_profiles(metadata, model_data, cluster_info, n_clusters):
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    for session in metadata['experiment_sessions']:
+        display_cluster_profile(metadata, model_data, consensus_subject, session, n_clusters)
+
+
+def get_cluster_tractogram_figure(metadata, model_data, cluster_type, subject, session_name, n_clusters):
+    """
+    combine cluster tractograms into single plot
+    """
+    from AFQ.utils.streamlines import bundles_to_tgram
+    from AFQ.data import read_mni_template
+    from identify_subbundles import move_tractogram_to_MNI_space
+
+    bundle_dict = metadata['experiment_bundle_dict']
+    
+    sfts = model_data[metadata['bundle_name']][f'{cluster_type}_cluster_tractograms'][subject][session_name][n_clusters]
+
+    bundles = {}
+    cluster_id = 0
+    for bundle_name in bundle_dict.keys():
+        bundles[bundle_name] = move_tractogram_to_MNI_space(session_name, subject, sfts[cluster_id])
+        cluster_id += 1
+
+        if cluster_id == n_clusters:
+            break
+
+    return visualize_tractogram(bundles_to_tgram(bundles, bundle_dict, read_mni_template()), bundle_dict)
+
+def get_clean_consensus_cluster_tractograms(metadata, model_data, cluster_info, n_clusters):
+    clean_consensus_cluster_figs = {}
+
+    for session_name in metadata['experiment_sessions']:
+        clean_consensus_cluster_figs[session_name] = get_cluster_tractogram_figure(
+            metadata, 
+            model_data, 
+            ClusterType.CLEAN, 
+            cluster_info[n_clusters]['consensus_subject'], 
+            session_name, 
+            n_clusters
         )
 
-        display(_visualize_centroids_by(
-            metadata, bundle_name, n_clusters,  cluster_info[n_clusters]['consensus_subject'], Algorithm.CENTROID)
-        )
+    return clean_consensus_cluster_figs
+
+def get_consensus_cluster_tractograms(metadata, model_data, cluster_info):
+    consensus_cluster_figs = {}
+    for cluster_type in [ClusterType.MODEL, ClusterType.FILTERED, ClusterType.CLEAN]:
+        consensus_cluster_figs[cluster_type] = {}
+        for n_clusters in metadata['experiment_range_n_clusters']:
+            consensus_cluster_figs[cluster_type][n_clusters] = {}
+            consensus_subject = cluster_info[n_clusters]['consensus_subject']
+            for session_name in metadata['experiment_sessions']:
+                consensus_cluster_figs[cluster_type][n_clusters][session_name] = get_cluster_tractogram_figure(
+                    metadata, model_data, cluster_type, consensus_subject, session_name, n_clusters
+                )
+                
+    return consensus_cluster_figs
+
+
+def get_subject_cluster_streamline_counts(metadata, model_data, subject, n_clusters):
+    """
+    calculate the streamlines for each stage of cleaning process for both sessions
+    """
+    import pandas as pd
+    
+    data = {}
+    
+    for cluster_id in range(n_clusters):
+        data[f'cluster {cluster_id}'] = {}
+        for session_name in metadata['experiment_sessions']:
+            data[f'cluster {cluster_id}'][session_name] = {}
+            for cluster_type in [ClusterType.MODEL, ClusterType.FILTERED, ClusterType.CLEAN]:
+                data[f'cluster {cluster_id}'][session_name][cluster_type] = {}
+                sft = model_data[metadata['bundle_name']][f'{cluster_type}_cluster_tractograms'][subject][session_name][n_clusters][cluster_id]
+                data[f'cluster {cluster_id}'][session_name][cluster_type] = len(sft)
+
+    dfs = []
+    keys = []
+    
+    for cluster_id in range(n_clusters):
+        dfs.append(pd.DataFrame(data[f'cluster {cluster_id}']))
+        keys.append(f'cluster {cluster_id}')
+                   
+    return pd.concat(dfs, keys=keys).T
+
+
+def display_consensus_cluster_streamline_counts(metadata, model_data, cluster_info):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_cluster_streamline_counts(metadata, model_data, cluster_info, n_clusters)
+
+
+def display_consensus_cluster_streamline_counts(metadata, model_data, cluster_info, n_clusters):
+    from IPython.display import display
+
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    
+    df = get_subject_cluster_streamline_counts(metadata, model_data, consensus_subject, n_clusters)
+    
+    display(
+        df.style.set_caption(f"{metadata['bundle_name']} K={n_clusters} {consensus_subject} streamline counts")
+    )
+
+
+def get_cluster_dice_coef(cluster_dice_coeffs, subject, n_clusters):
+    import pandas as pd
+    
+    return pd.DataFrame([cluster_dice_coeffs[n_clusters][subject]], index=[subject])
+
+def display_consensus_cluster_dice_coef(metadata, cluster_info, cluster_dice_coeffs):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_cluster_dice_coef(metadata, cluster_info, cluster_dice_coeffs, n_clusters)
+
+def display_consensus_cluster_dice_coef(metadata, cluster_info, cluster_dice_coeffs, n_clusters):
+    from IPython.display import display
+
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    
+    ccdc = get_cluster_dice_coef(
+        cluster_dice_coeffs, consensus_subject, n_clusters
+    )
+
+    display(
+        ccdc.style.set_caption(f"{metadata['bundle_name']} K={n_clusters} {consensus_subject} cluster weighted dice coefficient")
+    )
+
+def get_subject_cluster_profile_reliability(metadata, cluster_afq_profiles, subject, n_clusters):
+    import pandas as pd
+    import numpy as np
+    
+    test_retest_cluster_profile_r2 = {}
+    
+    subject_fa_profiles = cluster_afq_profiles[n_clusters][metadata['model_scalars'][0]][subject]
+    for cluster_id in range(n_clusters):
+        test_fa = subject_fa_profiles[metadata['experiment_sessions'][0]][cluster_id]
+        retest_fa = subject_fa_profiles[metadata['experiment_sessions'][1]][cluster_id]
+                
+        test_retest_cluster_profile_r2[cluster_id] = np.corrcoef(test_fa,retest_fa)[0, 1]
+
+    return pd.DataFrame(test_retest_cluster_profile_r2, index=[subject])
+
+def display_consensus_cluster_profile_reliability(metadata, cluster_info, cluster_afq_profiles):
+    for n_clusters in metadata['experiment_range_n_clusters']:
+        display_consensus_cluster_profile_reliability(metadata, cluster_info, cluster_afq_profiles, n_clusters)
+
+def display_consensus_cluster_profile_reliability(metadata, cluster_info, cluster_afq_profiles, n_clusters):
+    from IPython.display import display
+
+    consensus_subject = cluster_info[n_clusters]['consensus_subject']
+    
+    ccpr = get_subject_cluster_profile_reliability(
+        metadata, cluster_afq_profiles, consensus_subject, n_clusters
+    )
+    display(
+        ccpr.style.set_caption(f"{metadata['bundle_name']} K={n_clusters} {consensus_subject} cluster DTI FA pearson r")
+    )
